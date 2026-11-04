@@ -1,6 +1,6 @@
 //! Rendering results for people.
 
-use crate::catalog::Kind;
+use crate::catalog::{self, Kind};
 use crate::clean::{Level, Outcome, Plan, Status};
 use crate::scan::Scan;
 
@@ -20,6 +20,17 @@ pub fn human_size(bytes: u64) -> String {
     }
 }
 
+/// A signed change in size, such as `+2.0 kB` or `-300 B`; `new` when there
+/// is nothing to compare with.
+pub fn human_change(change: Option<i64>) -> String {
+    match change {
+        None => "new".to_string(),
+        Some(0) => "0 B".to_string(),
+        Some(c) if c > 0 => format!("+{}", human_size(c as u64)),
+        Some(c) => format!("-{}", human_size(c.unsigned_abs())),
+    }
+}
+
 fn kind_label(kind: Kind) -> &'static str {
     match kind {
         Kind::ToolCache => "tool cache",
@@ -27,10 +38,31 @@ fn kind_label(kind: Kind) -> &'static str {
 }
 
 pub fn scan_table(scan: &Scan) -> String {
+    let mut out = reclaimables_table(scan);
+    if !scan.gone.is_empty() {
+        out.push_str("\nGone since the last snapshot:\n");
+        let rows: Vec<[String; 3]> = scan
+            .gone
+            .iter()
+            .map(|g| {
+                let name = catalog::tool_cache(&g.id).map_or(g.id.as_str(), |k| k.name);
+                [
+                    name.to_string(),
+                    human_change(Some(-(g.previous_bytes as i64))),
+                    g.path.display().to_string(),
+                ]
+            })
+            .collect();
+        out.push_str(&table(["NAME", "CHANGE", "PATH"], &rows));
+    }
+    out
+}
+
+fn reclaimables_table(scan: &Scan) -> String {
     if scan.reclaimables.is_empty() {
         return "No reclaimables found.\n".to_string();
     }
-    let rows: Vec<[String; 4]> = scan
+    let rows: Vec<[String; 5]> = scan
         .reclaimables
         .iter()
         .map(|r| {
@@ -38,11 +70,16 @@ pub fn scan_table(scan: &Scan) -> String {
                 kind_label(r.kind).to_string(),
                 r.name.clone(),
                 human_size(r.size_bytes),
+                if scan.history_available {
+                    human_change(r.change_bytes)
+                } else {
+                    "unknown".to_string()
+                },
                 r.path.display().to_string(),
             ]
         })
         .collect();
-    table(["KIND", "NAME", "SIZE", "PATH"], &rows)
+    table(["KIND", "NAME", "SIZE", "CHANGE", "PATH"], &rows)
 }
 
 fn level_label(level: Level) -> &'static str {
@@ -129,6 +166,15 @@ fn table<const N: usize>(header: [&str; N], rows: &[[String; N]]) -> String {
 #[cfg(test)]
 mod tests {
     use super::human_size;
+
+    #[test]
+    fn changes_carry_their_sign() {
+        use super::human_change;
+        assert_eq!(human_change(None), "new");
+        assert_eq!(human_change(Some(0)), "0 B");
+        assert_eq!(human_change(Some(2000)), "+2.0 kB");
+        assert_eq!(human_change(Some(-300)), "-300 B");
+    }
 
     #[test]
     fn sizes_use_decimal_units() {

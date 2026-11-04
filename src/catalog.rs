@@ -12,6 +12,25 @@ pub enum Kind {
     ToolCache,
 }
 
+impl Kind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Kind::ToolCache => "tool-cache",
+        }
+    }
+}
+
+impl std::str::FromStr for Kind {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, String> {
+        match s {
+            "tool-cache" => Ok(Kind::ToolCache),
+            other => Err(format!("unknown kind of reclaimable: {other}")),
+        }
+    }
+}
+
 /// One kind of tool cache: its identity, how to find it on this machine and
 /// how its tool cleans it.
 pub struct ToolCacheKind {

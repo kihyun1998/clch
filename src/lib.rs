@@ -7,3 +7,4 @@ pub mod output;
 pub mod process;
 pub mod scan;
 pub mod size;
+pub mod snapshots;

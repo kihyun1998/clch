@@ -50,6 +50,24 @@ impl Env {
         self.local_app_data.as_ref()
     }
 
+    /// The folder clch keeps its own data in: `~/Library/Application
+    /// Support/clch` on macOS, `%LOCALAPPDATA%\\clch` on Windows, whose default
+    /// `~\\AppData\\Local` stands in when the variable is not set.
+    pub fn data_dir(&self) -> Option<PathBuf> {
+        if cfg!(windows) {
+            self.local_app_data
+                .clone()
+                .or_else(|| self.home.as_ref().map(|h| h.join("AppData").join("Local")))
+                .map(|d| d.join("clch"))
+        } else if cfg!(target_os = "macos") {
+            self.home
+                .as_ref()
+                .map(|h| h.join("Library/Application Support/clch"))
+        } else {
+            self.home.as_ref().map(|h| h.join(".local/share/clch"))
+        }
+    }
+
     /// The full path of `tool` on `PATH`, honouring `PATHEXT` on Windows.
     pub fn find_tool(&self, tool: &str) -> Option<PathBuf> {
         which::which_in(tool, self.path.as_ref(), &self.cwd).ok()

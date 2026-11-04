@@ -5,7 +5,7 @@ Find the disk space developer tooling leaves behind on Windows and macOS, see ho
 ## Usage
 
 ```sh
-clch scan          # list every reclaimable with its size
+clch scan          # list every reclaimable with its size and its change since the last scan
 clch scan --json   # the same, as JSON
 clch clean         # show what cleaning would do; nothing is removed
 clch clean --yes   # clean: only what nothing uses, through each tool's own command

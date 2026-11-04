@@ -50,6 +50,15 @@ impl Sandbox {
         self.root().join("bin")
     }
 
+    /// The folder clch keeps its own data in.
+    pub fn data_dir(&self) -> PathBuf {
+        if cfg!(windows) {
+            self.local_app_data().join("clch")
+        } else {
+            self.home().join("Library/Application Support/clch")
+        }
+    }
+
     /// The npm cache folder npm uses when nothing configures it.
     pub fn default_npm_cache(&self) -> PathBuf {
         if cfg!(windows) {

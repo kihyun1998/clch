@@ -3,7 +3,7 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 
 use clch::clean::{self, Level};
-use clch::{env::Env, output, scan};
+use clch::{env::Env, output, scan, snapshots};
 
 /// Find, track and safely clean developer caches and project artifacts.
 #[derive(Parser)]
@@ -49,7 +49,10 @@ fn main() -> ExitCode {
     let env = Env::from_process();
     match cli.command {
         Command::Scan { json } => {
-            let result = scan::run(&env);
+            let mut result = scan::run(&env);
+            if let Err(e) = snapshots::track(&env, &mut result) {
+                eprintln!("warning: snapshot history not available: {e}");
+            }
             if json {
                 print_json(&result);
             } else {
@@ -85,6 +88,9 @@ fn main() -> ExitCode {
                 print_json(&outcome);
             } else {
                 print!("{}", output::outcome_table(&outcome));
+            }
+            if let Err(e) = snapshots::record(&env, &scan::run(&env)) {
+                eprintln!("warning: snapshot not recorded: {e}");
             }
             if outcome.any_failed() {
                 ExitCode::from(1)
