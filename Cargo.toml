@@ -1,0 +1,21 @@
+[package]
+name = "clch"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Find, track and safely clean developer caches and project artifacts on Windows and macOS"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/kihyun1998/clch"
+readme = "README.md"
+keywords = ["cache", "cleaner", "disk-space", "npm", "cli"]
+categories = ["command-line-utilities", "filesystem"]
+
+[dependencies]
+clap = { version = "4.6", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+which = "8"
+
+[dev-dependencies]
+assert_cmd = "2.2"
+tempfile = "3.27"
