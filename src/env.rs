@@ -73,18 +73,39 @@ impl Env {
         answer
     }
 
-    fn run_tool(&self, tool: &str, args: &[&str]) -> Option<String> {
-        let program = self.find_tool(tool)?;
+    /// Runs `tool args` from the home folder until it finishes, with no time
+    /// limit. `Err` carries what the tool printed, or why it could not start.
+    pub fn run_to_completion(&self, tool: &str, args: &[&str]) -> Result<(), String> {
+        let program = self
+            .find_tool(tool)
+            .ok_or_else(|| format!("{tool} is not on PATH"))?;
+        let mut command = self.command(program, args);
+        command.stdout(Stdio::piped()).stderr(Stdio::piped());
+        let output = ToolProcess::spawn(&mut command, false)
+            .and_then(ToolProcess::wait_with_output)
+            .map_err(|e| format!("could not run {tool}: {e}"))?;
+        if output.status.success() {
+            return Ok(());
+        }
+        let mut printed = String::from_utf8_lossy(&output.stdout).into_owned();
+        printed.push_str(&String::from_utf8_lossy(&output.stderr));
+        Err(printed.trim().to_string())
+    }
+
+    fn command(&self, program: PathBuf, args: &[&str]) -> Command {
         let mut command = Command::new(program);
-        command
-            .args(args)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null());
+        command.args(args).stdin(Stdio::null());
         if let Some(home) = self.home.as_ref().filter(|h| h.is_dir()) {
             command.current_dir(home);
         }
-        let mut tool = ToolProcess::spawn(&mut command).ok()?;
+        command
+    }
+
+    fn run_tool(&self, tool: &str, args: &[&str]) -> Option<String> {
+        let program = self.find_tool(tool)?;
+        let mut command = self.command(program, args);
+        command.stdout(Stdio::piped()).stderr(Stdio::null());
+        let mut tool = ToolProcess::spawn(&mut command, true).ok()?;
         let deadline = Instant::now() + TOOL_TIMEOUT;
         let status = loop {
             match tool.child().try_wait() {

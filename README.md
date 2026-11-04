@@ -7,7 +7,12 @@ Find the disk space developer tooling leaves behind on Windows and macOS, see ho
 ```sh
 clch scan          # list every reclaimable with its size
 clch scan --json   # the same, as JSON
+clch clean         # show what cleaning would do; nothing is removed
+clch clean --yes   # clean: only what nothing uses, through each tool's own command
+clch clean npm-cache --full --yes   # remove all of one reclaimable
 ```
+
+A cleanup that fails is reported with the tool's output and makes `clch clean` exit with status 1; the others still run.
 
 ## License
 

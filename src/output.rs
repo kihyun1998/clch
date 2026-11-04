@@ -1,6 +1,7 @@
 //! Rendering results for people.
 
 use crate::catalog::Kind;
+use crate::clean::{Level, Outcome, Plan, Status};
 use crate::scan::Scan;
 
 /// A byte count in decimal units (kB, MB, GB).
@@ -42,6 +43,65 @@ pub fn scan_table(scan: &Scan) -> String {
         })
         .collect();
     table(["KIND", "NAME", "SIZE", "PATH"], &rows)
+}
+
+fn level_label(level: Level) -> &'static str {
+    match level {
+        Level::Unused => "unused cleanup",
+        Level::Full => "full cleanup",
+    }
+}
+
+pub fn plan_table(plan: &Plan) -> String {
+    let mut out = format!(
+        "Plan: {}. Nothing has been removed.\n\n",
+        level_label(plan.level)
+    );
+    if plan.plan.is_empty() {
+        out.push_str("No reclaimables found.\n");
+        return out;
+    }
+    let rows: Vec<[String; 3]> = plan
+        .plan
+        .iter()
+        .map(|e| {
+            let space = match (e.expected_bytes, e.cleanable) {
+                (Some(b), _) => human_size(b),
+                (None, true) => "known after cleaning".to_string(),
+                (None, false) => String::new(),
+            };
+            let action = match (&e.action, &e.reason) {
+                (Some(a), _) => a.clone(),
+                (None, Some(r)) => format!("skipped: {r}"),
+                _ => String::new(),
+            };
+            [e.name.clone(), action, space]
+        })
+        .collect();
+    out.push_str(&table(["NAME", "ACTION", "SPACE"], &rows));
+    out.push_str("\nRun again with --yes to carry out this plan.\n");
+    out
+}
+
+pub fn outcome_table(outcome: &Outcome) -> String {
+    let rows: Vec<[String; 3]> = outcome
+        .results
+        .iter()
+        .map(|r| {
+            let result = match r.status {
+                Status::Cleaned => "cleaned".to_string(),
+                Status::Skipped => format!("skipped: {}", r.reason.as_deref().unwrap_or_default()),
+                Status::Failed => format!("failed: {}", r.output.as_deref().unwrap_or_default()),
+            };
+            [r.name.clone(), result, human_size(r.freed_bytes)]
+        })
+        .collect();
+    let mut out = table(["NAME", "RESULT", "FREED"], &rows);
+    out.push_str(&format!(
+        "\nFreed {} in total.\n",
+        human_size(outcome.freed_bytes)
+    ));
+    out
 }
 
 fn table<const N: usize>(header: [&str; N], rows: &[[String; N]]) -> String {

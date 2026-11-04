@@ -1,5 +1,8 @@
+use std::process::ExitCode;
+
 use clap::{Parser, Subcommand};
 
+use clch::clean::{self, Level};
 use clch::{env::Env, output, scan};
 
 /// Find, track and safely clean developer caches and project artifacts.
@@ -18,21 +21,75 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Show what cleaning would do, or with --yes, do it.
+    Clean {
+        /// Reclaimables to clean, by id; all of them when none are given.
+        ids: Vec<String>,
+        /// Remove everything, not only what nothing uses.
+        #[arg(long)]
+        full: bool,
+        /// Carry out the plan instead of only showing it.
+        #[arg(long)]
+        yes: bool,
+        /// Print JSON instead of a table.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
-fn main() {
+fn print_json(value: &impl serde::Serialize) {
+    println!(
+        "{}",
+        serde_json::to_string_pretty(value).expect("result serializes")
+    );
+}
+
+fn main() -> ExitCode {
     let cli = Cli::parse();
     let env = Env::from_process();
     match cli.command {
         Command::Scan { json } => {
             let result = scan::run(&env);
             if json {
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&result).expect("scan serializes")
-                );
+                print_json(&result);
             } else {
                 print!("{}", output::scan_table(&result));
+            }
+            ExitCode::SUCCESS
+        }
+        Command::Clean {
+            ids,
+            full,
+            yes,
+            json,
+        } => {
+            let level = if full { Level::Full } else { Level::Unused };
+            let found = scan::run(&env);
+            let plan = match clean::plan(&env, &found, &ids, level) {
+                Ok(plan) => plan,
+                Err(clean::UnknownId(id)) => {
+                    eprintln!("error: no reclaimable is called '{id}'");
+                    return ExitCode::from(2);
+                }
+            };
+            if !yes {
+                if json {
+                    print_json(&plan);
+                } else {
+                    print!("{}", output::plan_table(&plan));
+                }
+                return ExitCode::SUCCESS;
+            }
+            let outcome = clean::execute(&env, plan);
+            if json {
+                print_json(&outcome);
+            } else {
+                print!("{}", output::outcome_table(&outcome));
+            }
+            if outcome.any_failed() {
+                ExitCode::from(1)
+            } else {
+                ExitCode::SUCCESS
             }
         }
     }

@@ -1,7 +1,7 @@
 //! Running a tool as a process tree that can be ended as a whole.
 
 use std::io;
-use std::process::{Child, Command};
+use std::process::{Child, Command, Output};
 
 /// A spawned tool together with every process it starts.
 pub struct ToolProcess {
@@ -11,17 +11,24 @@ pub struct ToolProcess {
 }
 
 impl ToolProcess {
-    pub fn spawn(command: &mut Command) -> io::Result<Self> {
+    /// Starts `command`. With `own_group`, the tool runs in a process group of
+    /// its own on Unix, out of reach of the terminal's Ctrl+C, so that
+    /// `kill_tree` can end it as a whole; without it the tool shares clch's
+    /// group and a Ctrl+C reaches both.
+    pub fn spawn(command: &mut Command, own_group: bool) -> io::Result<Self> {
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;
-            command.process_group(0);
+            if own_group {
+                command.process_group(0);
+            }
             Ok(ToolProcess {
                 child: command.spawn()?,
             })
         }
         #[cfg(windows)]
         {
+            let _ = own_group;
             let job = windows::Job::new()?;
             let child = command.spawn()?;
             job.assign(&child)?;
@@ -31,6 +38,20 @@ impl ToolProcess {
 
     pub fn child(&mut self) -> &mut Child {
         &mut self.child
+    }
+
+    /// Waits for the tool to finish and collects what it printed; anything it
+    /// started is ended once it has finished.
+    pub fn wait_with_output(self) -> io::Result<Output> {
+        let ToolProcess {
+            child,
+            #[cfg(windows)]
+            job,
+        } = self;
+        let output = child.wait_with_output();
+        #[cfg(windows)]
+        drop(job);
+        output
     }
 
     /// Ends the tool and everything it started, then reaps the tool.

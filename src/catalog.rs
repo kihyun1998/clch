@@ -12,11 +12,24 @@ pub enum Kind {
     ToolCache,
 }
 
-/// One kind of tool cache: its identity and how to find it on this machine.
+/// One kind of tool cache: its identity, how to find it on this machine and
+/// how its tool cleans it.
 pub struct ToolCacheKind {
     pub id: &'static str,
     pub name: &'static str,
     pub locate: fn(&Env) -> Option<PathBuf>,
+    pub cleanup: NativeCleanup,
+}
+
+/// The owning tool's own cleanup commands, per cleanup level. `None` where
+/// the tool offers no command for that level.
+pub struct NativeCleanup {
+    pub tool: &'static str,
+    pub unused: Option<&'static [&'static str]>,
+    pub full: Option<&'static [&'static str]>,
+    /// The oldest tool version that has these commands, as `tool --version`
+    /// prints it.
+    pub min_version: Option<&'static str>,
 }
 
 pub fn tool_caches() -> &'static [ToolCacheKind] {
@@ -25,13 +38,29 @@ pub fn tool_caches() -> &'static [ToolCacheKind] {
             id: "npm-cache",
             name: "npm cache",
             locate: npm::cache,
+            cleanup: NativeCleanup {
+                tool: "npm",
+                unused: Some(&["cache", "verify"]),
+                full: Some(&["cache", "clean", "--force"]),
+                min_version: None,
+            },
         },
         ToolCacheKind {
             id: "npx-cache",
             name: "npx cache",
             locate: npm::npx_cache,
+            cleanup: NativeCleanup {
+                tool: "npm",
+                unused: None,
+                full: Some(&["cache", "npx", "rm", "--force"]),
+                min_version: Some("11.2.0"),
+            },
         },
     ]
+}
+
+pub fn tool_cache(id: &str) -> Option<&'static ToolCacheKind> {
+    tool_caches().iter().find(|k| k.id == id)
 }
 
 mod npm {
