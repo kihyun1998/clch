@@ -100,7 +100,7 @@ impl NpmMachine {
         // Each command jumps to its own label and ends with a top-level
         // `exit /b`, whose status cmd.exe passes back.
         let mut windows =
-            format!("set \"ARGS=%*\"\r\nif \"%ARGS%\"==\"config get cache\" goto config\r\n");
+            "set \"ARGS=%*\"\r\nif \"%ARGS%\"==\"config get cache\" goto config\r\n".to_string();
         let mut labels = format!(":config\r\necho {root}\r\nexit /b 0\r\n");
         for (i, (args, behaviour)) in commands.iter().enumerate() {
             unix.push_str(&format!("  '{args}') {} ;;\n", behaviour.unix));
