@@ -9,17 +9,23 @@ struct Behaviour {
     windows: String,
 }
 
+/// `path` as a batch file must spell it: `del` and `rmdir` read `/` as the
+/// start of a switch.
+fn batch_path(path: &Path) -> String {
+    path.display().to_string().replace('/', "\\")
+}
+
 fn remove_dir(dir: &Path) -> Behaviour {
     Behaviour {
         unix: format!("rm -rf '{}'", dir.display()),
-        windows: format!("rmdir /s /q \"{}\"", dir.display()),
+        windows: format!("rmdir /s /q \"{}\"", batch_path(dir)),
     }
 }
 
 fn remove_file(file: &Path) -> Behaviour {
     Behaviour {
         unix: format!("rm -f '{}'", file.display()),
-        windows: format!("del /q \"{}\"", file.display()),
+        windows: format!("del /q \"{}\"", batch_path(file)),
     }
 }
 
@@ -91,16 +97,18 @@ impl NpmMachine {
         }
         let root = self.root.display();
         let mut unix = format!("case \"$*\" in\n  'config get cache') echo '{root}' ;;\n");
-        let mut windows = format!(
-            "set \"ARGS=%*\"\r\nif \"%ARGS%\"==\"config get cache\" (echo {root}\r\nexit /b 0)\r\n"
-        );
-        for (args, behaviour) in &commands {
+        // Each command jumps to its own label and ends with a top-level
+        // `exit /b`, whose status cmd.exe passes back.
+        let mut windows =
+            format!("set \"ARGS=%*\"\r\nif \"%ARGS%\"==\"config get cache\" goto config\r\n");
+        let mut labels = format!(":config\r\necho {root}\r\nexit /b 0\r\n");
+        for (i, (args, behaviour)) in commands.iter().enumerate() {
             unix.push_str(&format!("  '{args}') {} ;;\n", behaviour.unix));
-            windows.push_str(&format!(
-                "if \"%ARGS%\"==\"{args}\" (\r\n{}\r\nexit /b 0\r\n)\r\n",
-                behaviour.windows
-            ));
+            windows.push_str(&format!("if \"%ARGS%\"==\"{args}\" goto c{i}\r\n"));
+            labels.push_str(&format!(":c{i}\r\n{}\r\nexit /b 0\r\n", behaviour.windows));
         }
+        windows.push_str("exit /b 0\r\n");
+        windows.push_str(&labels);
         unix.push_str("esac");
         self.sb.fake_tool("npm", &unix, &windows);
     }
