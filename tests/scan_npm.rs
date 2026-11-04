@@ -271,3 +271,25 @@ fn a_cache_folder_that_is_a_symlink_is_sized_by_what_it_points_to() {
         444
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn an_abandoned_tool_leaves_no_process_behind() {
+    let sb = Sandbox::new();
+    let pid_file = sb.root().join("child.pid");
+    sb.fake_tool(
+        "npm",
+        &format!("sleep 60 & echo $! > '{}'; wait", pid_file.display()),
+        "",
+    );
+
+    sb.json(&["scan"]);
+
+    let pid = std::fs::read_to_string(&pid_file).expect("fake npm started its child");
+    let alive = std::process::Command::new("/bin/kill")
+        .args(["-0", pid.trim()])
+        .status()
+        .expect("run kill -0")
+        .success();
+    assert!(!alive, "the tool's child {pid} is still running");
+}

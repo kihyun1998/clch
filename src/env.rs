@@ -8,6 +8,8 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+use crate::process::ToolProcess;
+
 /// How long a tool may take to answer before clch gives up on it.
 const TOOL_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -82,24 +84,25 @@ impl Env {
         if let Some(home) = self.home.as_ref().filter(|h| h.is_dir()) {
             command.current_dir(home);
         }
-        let mut child = command.spawn().ok()?;
+        let mut tool = ToolProcess::spawn(&mut command).ok()?;
         let deadline = Instant::now() + TOOL_TIMEOUT;
         let status = loop {
-            match child.try_wait().ok()? {
-                Some(status) => break status,
-                None if Instant::now() >= deadline => {
-                    let _ = child.kill();
-                    let _ = child.wait();
+            match tool.child().try_wait() {
+                Ok(Some(status)) => break status,
+                Ok(None) if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(20))
+                }
+                _ => {
+                    tool.kill_tree();
                     return None;
                 }
-                None => std::thread::sleep(Duration::from_millis(20)),
             }
         };
         if !status.success() {
             return None;
         }
         let mut out = String::new();
-        child.stdout.take()?.read_to_string(&mut out).ok()?;
+        tool.child().stdout.take()?.read_to_string(&mut out).ok()?;
         Some(out)
     }
 }

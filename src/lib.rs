@@ -3,5 +3,6 @@
 pub mod catalog;
 pub mod env;
 pub mod output;
+pub mod process;
 pub mod scan;
 pub mod size;

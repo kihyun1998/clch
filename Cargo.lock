@@ -136,10 +136,12 @@ version = "0.1.0"
 dependencies = [
  "assert_cmd",
  "clap",
+ "libc",
  "serde",
  "serde_json",
  "tempfile",
  "which",
+ "windows-sys",
 ]
 
 [[package]]
