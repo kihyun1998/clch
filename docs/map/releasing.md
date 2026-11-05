@@ -14,6 +14,19 @@ These take a person's credentials, so the workflow does not do them:
 
 Homebrew resolves `brew install <owner>/clch/clch` to a repository named `homebrew-clch`.
 
+## README
+
+The README gives only the build from source until a release exists, as its install commands would otherwise fail. With the first release, it lists these, which #16 asks for:
+
+```sh
+brew install kihyun1998/clch/clch
+scoop bucket add clch https://github.com/kihyun1998/scoop-clch
+scoop install clch/clch
+cargo install clch
+```
+
+and a binary for each OS from GitHub Releases. The repository names `homebrew-clch` and `scoop-clch` are assumed, and neither exists yet.
+
 ## Not yet run
 
 The workflow has never run: it needs a tag. The rendered files were checked with `ruby -c`, as JSON and for their hashes, not by installing them.

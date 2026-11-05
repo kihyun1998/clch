@@ -18,3 +18,9 @@ A Rust CLI for Windows and macOS that detects and tracks developer caches (npm, 
 | sasurahime (Rust, macOS cache cleaner) | how it works | its source tree, github.com/armaniacs/sasurahime — raw | example |
 | cacheferret (Python cache cleaner) | how it works | its PyPI page — **summarized**; no source repo found | example |
 | kondo (Rust, project build-dir cleaner) | how it works | its source tree, github.com/tbillington/kondo — raw | example |
+| Homebrew `brew cleanup --help` | how it works | the installed `brew` — raw | binding |
+| Dart `pub cache` docs and pub's `cache_gc.dart` | how it works | dart.dev/tools/pub/cmd/pub-cache — **summarized**; github.com/dart-lang/pub — raw | binding |
+| Xcode: `xcrun simctl help`, WWDC26 Xcode Tips and Tricks Group Lab | how it works | the installed `xcrun` — raw; developer.apple.com/videos/play/wwdc2026/8013 — transcript | binding |
+| Docker `image prune`, `system df`, docker/cli `formatter/disk_usage.go` | how it works | docs.docker.com — **summarized**; github.com/docker/cli — raw | binding |
+| WSL: `compact vdisk`, `wsl-config`, `wsl.exe` help strings | how it works | learn.microsoft.com — **summarized**; github.com/microsoft/WSL `localization/strings/en-US/Resources.resw` — raw | binding |
+| Corepack README | how it works | github.com/nodejs/corepack — raw | binding |

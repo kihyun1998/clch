@@ -42,8 +42,7 @@ impl Sandbox {
         sandbox
     }
 
-    /// How long clch waits for a tool's answer from now on. A fake tool's first
-    /// run can take seconds, so the limit is long unless a test is about it.
+    /// How long clch waits for a tool's answer from now on.
     pub fn limit_tools_to(&self, seconds: u32) {
         self.tool_limit_secs
             .store(seconds, std::sync::atomic::Ordering::Relaxed);
@@ -264,7 +263,6 @@ pub fn removes(path: &Path) -> Reply {
 /// A fake tool answering exactly these command lines, and nothing otherwise.
 pub fn tool(sb: &Sandbox, name: &str, replies: Vec<(&str, Reply)>) {
     let mut unix = String::from("case \"$*\" in\n");
-    // Rust quotes an argument holding `=` or `{` for a batch file.
     let mut windows =
         String::from("set \"ARGS=%*\"\r\nif defined ARGS set \"ARGS=%ARGS:\"=%\"\r\n");
     let mut labels = String::new();
