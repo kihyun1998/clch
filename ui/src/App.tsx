@@ -1,9 +1,33 @@
 import { useCallback, useEffect, useState } from "react";
-import { post, type DiskTotal, type Reclaimable, type Scan } from "./api";
+import {
+  get,
+  post,
+  type DiskTotal,
+  type History,
+  type Reclaimable,
+  type ReclaimableHistory,
+  type Scan,
+} from "./api";
 import { colorClass, DiskMap } from "./DiskMap";
 import { bounded, diskLabel, lastChanged, size, title } from "./format";
+import { Trend, type TrendPoint } from "./Trend";
 
 const UNKNOWN_DISK = "unknown";
+const MONTH_MS = 30 * 86_400_000;
+
+function seriesOf(history: History | null, r: Reclaimable): ReclaimableHistory | undefined {
+  const same = history?.reclaimables.filter((s) => s.id === r.id) ?? [];
+  return same.length === 1 ? same[0] : same.find((s) => s.path === r.path);
+}
+
+/** How much it grew over the last 30 days, between readings that are not lower bounds. */
+function growth(series: ReclaimableHistory | undefined): number | null {
+  const points = series?.points.filter((p) => p.complete) ?? [];
+  const last = points[points.length - 1];
+  if (!last) return null;
+  const first = points.find((p) => p.taken_at_ms >= last.taken_at_ms - MONTH_MS);
+  return first && first !== last ? last.size_bytes - first.size_bytes : null;
+}
 
 function onDisk(scan: Scan, disk: string): Reclaimable[] {
   return scan.reclaimables
@@ -24,6 +48,8 @@ export function App() {
   const [scanning, setScanning] = useState(true);
   const [disk, setDisk] = useState<string | null>(null);
   const [focused, setFocused] = useState<Reclaimable | null>(null);
+  const [history, setHistory] = useState<History | null>(null);
+  const [historyFailure, setHistoryFailure] = useState<string | null>(null);
 
   const run = useCallback(async () => {
     setScanning(true);
@@ -37,6 +63,12 @@ export function App() {
           ? now
           : shortest(result.disks),
       );
+      try {
+        setHistory(await get<History>("/api/history"));
+        setHistoryFailure(null);
+      } catch (e) {
+        setHistoryFailure(e instanceof Error ? e.message : String(e));
+      }
     } catch (e) {
       setFailure(e instanceof Error ? e.message : String(e));
     } finally {
@@ -94,7 +126,13 @@ export function App() {
           )}
           <aside className="side">
             <Notes scan={scan} />
-            {focused && <Details r={focused} />}
+            {historyFailure && <p className="problem">History is not available: {historyFailure}</p>}
+            {focused ? (
+              <Details r={focused} series={seriesOf(history, focused)} />
+            ) : (
+              <DiskTrends history={history} disk={disk} />
+            )}
+            <Growing history={history} items={items} onFocus={setFocused} />
             <h2>On this disk</h2>
             <ul className="list">
               {items.map((r) => (
@@ -118,7 +156,61 @@ export function App() {
   );
 }
 
-function Details({ r }: { r: Reclaimable }) {
+function DiskTrends({ history, disk }: { history: History | null; disk: string | null }) {
+  const points = history?.disks.find((d) => d.disk === disk)?.points ?? [];
+  if (points.length < 2) {
+    return <p className="quiet">Growth appears after the next scan.</p>;
+  }
+  const free: TrendPoint[] = points
+    .filter((p) => p.free_bytes !== null)
+    .map((p) => ({ at: p.taken_at_ms, value: p.free_bytes ?? 0 }));
+  const back: TrendPoint[] = points
+    .filter((p) => p.complete)
+    .map((p) => ({ at: p.taken_at_ms, value: p.reclaimable_bytes }));
+  return (
+    <section className="panel">
+      <Trend label="Can come back" points={back} />
+      <Trend label="Free" points={free} />
+    </section>
+  );
+}
+
+function Growing({
+  history,
+  items,
+  onFocus,
+}: {
+  history: History | null;
+  items: Reclaimable[];
+  onFocus: (r: Reclaimable) => void;
+}) {
+  const grew = items
+    .map((r) => ({ r, by: growth(seriesOf(history, r)) }))
+    .filter((g): g is { r: Reclaimable; by: number } => g.by !== null && g.by > 0)
+    .sort((a, b) => b.by - a.by)
+    .slice(0, 5);
+  if (grew.length === 0) return null;
+  return (
+    <>
+      <h2>Grew most in 30 days</h2>
+      <ul className="list">
+        {grew.map(({ r, by }) => (
+          <li key={`${r.id}:${r.path}`}>
+            <button title={r.path} onClick={() => onFocus(r)}>
+              <span className="name">{title(r)}</span>
+              <span>+{size(by)}</span>
+            </button>
+          </li>
+        ))}
+      </ul>
+    </>
+  );
+}
+
+function Details({ r, series }: { r: Reclaimable; series?: ReclaimableHistory }) {
+  const points: TrendPoint[] = (series?.points ?? [])
+    .filter((p) => p.complete)
+    .map((p) => ({ at: p.taken_at_ms, value: p.size_bytes }));
   return (
     <section className="panel">
       <h2>{title(r)}</h2>
@@ -126,6 +218,7 @@ function Details({ r }: { r: Reclaimable }) {
       <p>{r.name}</p>
       {r.last_modified_ms !== null && <p>{lastChanged(r.last_modified_ms)}</p>}
       <p className="path">{r.path}</p>
+      <Trend label="Size over time" points={points} />
     </section>
   );
 }

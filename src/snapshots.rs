@@ -91,6 +91,67 @@ impl From<rusqlite::Error> for StoreError {
     }
 }
 
+/// One snapshot, by when it was taken.
+#[derive(Debug, Serialize)]
+pub struct SnapshotInfo {
+    pub id: i64,
+    pub taken_at_ms: i64,
+    /// True when one-off scan roots replaced the configured ones.
+    pub partial: bool,
+}
+
+/// A reclaimable's size in one snapshot.
+#[derive(Debug, Serialize)]
+pub struct SizePoint {
+    pub snapshot: i64,
+    pub taken_at_ms: i64,
+    pub size_bytes: i64,
+    /// False when `size_bytes` was a lower bound.
+    pub complete: bool,
+    /// True when this snapshot found it gone.
+    pub gone: bool,
+}
+
+/// A reclaimable over time, at the path it last had.
+#[derive(Debug, Serialize)]
+pub struct ReclaimableHistory {
+    pub id: String,
+    pub kind: Kind,
+    pub path: PathBuf,
+    pub points: Vec<SizePoint>,
+}
+
+/// A disk's totals in one snapshot.
+#[derive(Debug, Serialize)]
+pub struct DiskPoint {
+    pub snapshot: i64,
+    pub taken_at_ms: i64,
+    pub free_bytes: Option<i64>,
+    pub reclaimable_bytes: i64,
+    /// False when `reclaimable_bytes` was a lower bound.
+    pub complete: bool,
+}
+
+/// A disk over time, from snapshots of the configured scan roots.
+#[derive(Debug, Serialize)]
+pub struct DiskHistory {
+    pub disk: String,
+    pub points: Vec<DiskPoint>,
+}
+
+/// Every snapshot, in the order they were recorded.
+#[derive(Debug, Serialize)]
+pub struct History {
+    pub snapshots: Vec<SnapshotInfo>,
+    pub reclaimables: Vec<ReclaimableHistory>,
+    pub disks: Vec<DiskHistory>,
+}
+
+/// Reads all the history kept.
+pub fn history(env: &Env) -> Result<History, StoreError> {
+    Store::in_data_folder(env)?.history()
+}
+
 /// Compares `scan` with the latest snapshot, then records it as a new one.
 pub fn track(env: &Env, scan: &mut Scan) -> Result<(), StoreError> {
     let mut store = Store::in_data_folder(env)?;
@@ -204,6 +265,89 @@ impl Store {
             .sort_by(|a, b| (&a.id, &a.path).cmp(&(&b.id, &b.path)));
         scan.history_available = true;
         Ok(())
+    }
+
+    /// Reads every snapshot, ordered by id.
+    pub fn history(&self) -> Result<History, StoreError> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, taken_at_ms, partial FROM snapshot ORDER BY id")?;
+        let snapshots = stmt
+            .query_map([], |row| {
+                Ok(SnapshotInfo {
+                    id: row.get(0)?,
+                    taken_at_ms: row.get(1)?,
+                    partial: row.get(2)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let mut stmt = self.conn.prepare(
+            "SELECT r.reclaimable_id, r.kind, r.path, r.snapshot_id, s.taken_at_ms,
+                    r.size_bytes, r.complete, r.gone
+             FROM reclaimable_size r JOIN snapshot s ON s.id = r.snapshot_id
+             ORDER BY r.snapshot_id",
+        )?;
+        let mut rows = stmt.query([])?;
+        let mut reclaimables: Vec<ReclaimableHistory> = Vec::new();
+        let mut known: HashMap<(String, Option<String>), usize> = HashMap::new();
+        while let Some(row) = rows.next()? {
+            let id: String = row.get(0)?;
+            let kind = row.get::<_, String>(1)?.parse::<Kind>().map_err(|e| {
+                rusqlite::Error::FromSqlConversionFailure(1, rusqlite::types::Type::Text, e.into())
+            })?;
+            let path: String = row.get(2)?;
+            let at = *known.entry(identity(kind, &id, &path)).or_insert_with(|| {
+                reclaimables.push(ReclaimableHistory {
+                    id,
+                    kind,
+                    path: PathBuf::new(),
+                    points: Vec::new(),
+                });
+                reclaimables.len() - 1
+            });
+            reclaimables[at].path = PathBuf::from(path);
+            reclaimables[at].points.push(SizePoint {
+                snapshot: row.get(3)?,
+                taken_at_ms: row.get(4)?,
+                size_bytes: row.get(5)?,
+                complete: row.get(6)?,
+                gone: row.get(7)?,
+            });
+        }
+
+        let mut stmt = self.conn.prepare(
+            "SELECT d.disk, d.snapshot_id, s.taken_at_ms, d.free_bytes, d.reclaimable_bytes,
+                    d.complete
+             FROM disk_total d JOIN snapshot s ON s.id = d.snapshot_id
+             WHERE s.partial = 0
+             ORDER BY d.disk, d.snapshot_id",
+        )?;
+        let mut rows = stmt.query([])?;
+        let mut disks: Vec<DiskHistory> = Vec::new();
+        while let Some(row) = rows.next()? {
+            let disk: String = row.get(0)?;
+            if disks.last().is_none_or(|d| d.disk != disk) {
+                disks.push(DiskHistory {
+                    disk,
+                    points: Vec::new(),
+                });
+            }
+            if let Some(last) = disks.last_mut() {
+                last.points.push(DiskPoint {
+                    snapshot: row.get(1)?,
+                    taken_at_ms: row.get(2)?,
+                    free_bytes: row.get(3)?,
+                    reclaimable_bytes: row.get(4)?,
+                    complete: row.get(5)?,
+                });
+            }
+        }
+        Ok(History {
+            snapshots,
+            reclaimables,
+            disks,
+        })
     }
 
     /// Records `scan` as a new snapshot.

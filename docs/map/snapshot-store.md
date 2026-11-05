@@ -16,6 +16,12 @@ Each `clch scan`, and each `clch clean --yes` once it finishes, writes a snapsho
 - **`new` and `unknown` differ.** `new` means the store has no earlier size for it. `unknown` means either the store could not be used, which is also `history_available: false` in JSON, or one of the two measurements is a lower bound. A store that cannot be used never fails a scan.
 - **Order snapshots by id, not time.** `taken_at_ms` is when the scan started, from the system clock, which can go backwards and differ between overlapping runs.
 
+## Reading it back
+
+`GET /api/history` returns every snapshot, each reclaimable's sizes under the same identity comparing uses, and each disk's totals. It sends everything, as the data is small and the screen needs most of it; nothing yet shows how large it gets over years. Snapshots from one-off scan roots are in the reclaimables' series, since each row is a true size, and left out of the disks' series. The chart spaces points by scan, not by date, so a gap in use does not read as a flat stretch.
+
+A disk stays named by where it is mounted, as the glossary has it. So a Windows drive letter used by another disk, or a macOS remount as `T7 1`, would mix or split that disk's series. That was inferred in a completeness read on #5 and has not been seen. The cost of a volume identifier is a schema change and a per-OS lookup, for a case not yet met.
+
 ## Changing the schema
 
 `user_version` holds the schema version and `migrate` brings an older store up. Sizes from schema 1 are marked incomplete by the upgrade: they are file lengths, so comparing them with allocated sizes would show a change that did not happen. A store from a newer clch is left alone and reported, because snapshots are kept forever.

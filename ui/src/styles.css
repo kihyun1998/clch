@@ -38,14 +38,21 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .tile b { font-size: 13px; }
 .tile span { white-space: nowrap; }
 .tile.focused { outline: 3px solid #fff; outline-offset: -3px; }
-.kind-cache { background-color: #c9b8a8; }
-.kind-target { background-color: #e58f65; }
-.kind-node_modules { background-color: #8fcb7a; }
-.kind-dart_tool { background-color: #6fc1e8; }
-.kind-build { background-color: #a9b8f0; }
-.kind-venv { background-color: #e6d36f; }
+.kind-target { background-color: #3987e5; }
+.kind-node_modules { background-color: #d95926; }
+.kind-dart_tool { background-color: #199e70; }
+.kind-build { background-color: #c98500; }
+.kind-venv { background-color: #d55181; }
+.kind-cache { background-color: #008300; color: #fff; }
 
 .side { overflow: auto; min-height: 0; }
+.quiet { color: var(--muted); }
+.trend { margin: 10px 0 0; }
+.trend figcaption { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; color: var(--muted); }
+.trend svg { display: block; width: 100%; height: 56px; }
+.trend .series { fill: none; stroke: var(--accent); stroke-width: 2; vector-effect: non-scaling-stroke; }
+.trend .baseline { stroke: var(--line); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.trend .mark { fill: var(--accent); stroke: var(--well); stroke-width: 2; }
 .side h2 { font-size: 15px; font-weight: 600; margin: 0 0 8px; }
 .panel { background: var(--well); border-radius: 3px; padding: 12px; margin-bottom: 14px; }
 .panel p { margin: 0 0 4px; }
@@ -53,6 +60,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .path { color: var(--muted); overflow-wrap: anywhere; font-size: 12px; }
 .problem { color: var(--problem); margin: 0 0 10px; }
 .list { list-style: none; margin: 0; padding: 0; }
+.side .list { margin-bottom: 14px; }
 .list button { display: flex; width: 100%; gap: 8px; align-items: center; background: none; border: 0; border-bottom: 1px solid var(--line); padding: 5px 2px; text-align: left; font-size: 13px; }
 .list button.focused { background: var(--line); }
 .swatch { flex: none; width: 10px; height: 10px; }

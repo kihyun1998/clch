@@ -118,6 +118,8 @@ fn api(request: &Request, path: &str) -> Reply {
     match (path, request.method()) {
         ("/api/scan", Method::Post) => run_scan(),
         ("/api/scan", _) => error(405, "use POST"),
+        ("/api/history", Method::Get) => read_history(),
+        ("/api/history", _) => error(405, "use GET"),
         _ => error(404, "no such endpoint"),
     }
 }
@@ -133,6 +135,13 @@ fn run_scan() -> Reply {
         eprintln!("warning: snapshot history not available: {e}");
     }
     json(200, &result)
+}
+
+fn read_history() -> Reply {
+    match snapshots::history(&Env::from_process()) {
+        Ok(history) => json(200, &history),
+        Err(e) => error(500, &e.to_string()),
+    }
 }
 
 fn asset(path: &str) -> Reply {

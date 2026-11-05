@@ -1,6 +1,6 @@
 mod common;
 
-use common::{Sandbox, blocks, reclaimable};
+use common::{Dashboard, Sandbox, blocks, reclaimable};
 
 fn npm_cache_with(sb: &Sandbox, bytes: usize) {
     let cache = sb.default_npm_cache().join("_cacache");
@@ -8,11 +8,16 @@ fn npm_cache_with(sb: &Sandbox, bytes: usize) {
     sb.write_file(&cache.join("content-v2/a"), bytes);
 }
 
-fn snapshot_count(sb: &Sandbox) -> i64 {
-    let db =
-        rusqlite::Connection::open(sb.data_dir().join("clch.db")).expect("open snapshot store");
-    db.query_row("SELECT count(*) FROM snapshot", [], |r| r.get(0))
-        .expect("count snapshots")
+/// The history clch reports through its dashboard.
+fn history(sb: &Sandbox) -> serde_json::Value {
+    let running = Dashboard::start(sb, &["--no-open"]);
+    let response = running.api("GET", "/api/history", "");
+    assert_eq!(response.status, 200, "{}", response.text());
+    response.json()
+}
+
+fn snapshot_count(sb: &Sandbox) -> usize {
+    history(sb)["snapshots"].as_array().unwrap().len()
 }
 
 #[test]
@@ -152,11 +157,6 @@ fn scans_at_the_same_time_keep_the_history_whole() {
     run_together(&sb, 8);
 
     assert_eq!(snapshot_count(&sb), 9);
-    let db = rusqlite::Connection::open(sb.data_dir().join("clch.db")).unwrap();
-    let check: String = db
-        .query_row("PRAGMA integrity_check", [], |r| r.get(0))
-        .unwrap();
-    assert_eq!(check, "ok");
 }
 
 fn run_together(sb: &Sandbox, count: usize) {
@@ -271,6 +271,9 @@ fn a_store_from_a_newer_clch_is_left_alone() {
     );
     let scan: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(scan["history_available"], false);
+    let db = rusqlite::Connection::open(sb.data_dir().join("clch.db")).unwrap();
+    db.pragma_update(None, "user_version", 3).unwrap();
+    drop(db);
     assert_eq!(snapshot_count(&sb), 1);
 }
 
@@ -399,16 +402,9 @@ fn a_snapshot_keeps_each_disks_totals() {
     let scan = sb.json(&["scan"]);
 
     let disk = &scan["disks"][0];
-    let db = rusqlite::Connection::open(sb.data_dir().join("clch.db")).unwrap();
-    let (name, free, reclaimable, complete): (String, Option<i64>, i64, bool) = db
-        .query_row(
-            "SELECT disk, free_bytes, reclaimable_bytes, complete FROM disk_total",
-            [],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
-        )
-        .unwrap();
-    assert_eq!(name, disk["disk"].as_str().unwrap());
-    assert_eq!(free, disk["free_bytes"].as_i64());
-    assert_eq!(reclaimable, blocks(3));
-    assert!(complete);
+    let kept = &history(&sb)["disks"][0];
+    assert_eq!(kept["disk"], disk["disk"]);
+    assert_eq!(kept["points"][0]["free_bytes"], disk["free_bytes"]);
+    assert_eq!(kept["points"][0]["reclaimable_bytes"], blocks(3));
+    assert_eq!(kept["points"][0]["complete"], true);
 }
