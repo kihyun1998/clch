@@ -570,7 +570,7 @@ pub fn execute(env: &Env, plan: Plan, before: &Scan, scope: &Scope) -> (Outcome,
             let attempted = run.is_some();
             let partly_deleted = matches!(entry.method, Some(Method::Direct(_)))
                 && was.is_some_and(|w| now.is_none_or(|n| n.size_bytes < w.size_bytes));
-            let unseen = was.is_some_and(&silent_after);
+            let unseen = was.is_some_and(silent_after);
             let freed_bytes = match was {
                 Some(_) if unseen => 0,
                 Some(was) if attempted => was
