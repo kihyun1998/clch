@@ -96,7 +96,7 @@ mod imp {
         // other two out pointers may be null.
         let ok = unsafe {
             GetDiskFreeSpaceExW(
-                volume.as_ptr(),
+                mount.as_ptr(),
                 &mut free,
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
