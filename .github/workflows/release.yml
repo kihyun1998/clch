@@ -1,0 +1,81 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  binary:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: macos-latest
+            target: x86_64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: cargo build --release --target ${{ matrix.target }}
+      - name: Pack (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          tar -czf "clch-${{ matrix.target }}.tar.gz" -C "target/${{ matrix.target }}/release" clch
+      - name: Pack (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "target/${{ matrix.target }}/release/clch.exe" -DestinationPath "clch-${{ matrix.target }}.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: clch-${{ matrix.target }}
+          path: clch-${{ matrix.target }}.*
+
+  crate:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Build the UI the crate carries
+        run: cargo build
+      - name: Package the crate and install it with no Node on PATH
+        run: |
+          cargo package --allow-dirty
+          cargo="$(command -v cargo)"
+          PATH="$(dirname "$cargo"):/usr/bin:/bin" cargo install --path "target/package/clch-${GITHUB_REF_NAME#v}" --root "$RUNNER_TEMP/installed"
+          "$RUNNER_TEMP/installed/bin/clch" --version
+
+  release:
+    needs: [binary, crate]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Write the Homebrew formula and the Scoop manifest
+        run: python3 packaging/render.py "${GITHUB_REF_NAME#v}" dist
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/clch-*
+            dist/clch.rb
+            dist/clch.json

@@ -8,4 +8,5 @@ The territory map. A comment's why, trap and measured value go to a note here. N
 - [Project artifacts](project-artifacts.md): what counts as one, where they are looked for, and what it takes to delete one.
 - [Dashboard](dashboard.md): how the local server decides who it answers, and how the UI gets into the binary.
 - [Adding a kind of reclaimable](adding-a-reclaimable.md): the rules a new tool cache or project artifact has to obey.
+- [Releasing](releasing.md): what a tagged release does, and what a person does by hand.
 - [Checking Windows from a Mac](checking-windows.md): type-checking the Windows code before pushing.

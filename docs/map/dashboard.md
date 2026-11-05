@@ -39,7 +39,7 @@ Each runs on its own thread with its own `Env`, which is not shareable and which
 
 ## The UI in the binary
 
-`build.rs` runs `npm ci` where `ui/node_modules` is missing, then `npm run build` (`tsc` and Vite), and generates a table of `include_bytes!` over `ui/dist`. It builds whenever `ui/package.json` is there and a watched source changed. A crate packaged with only `ui/dist` needs no Node. A UI that does not build stops the build, so a type error cannot ship an old UI. Only where npm cannot run at all and a `ui/dist` exists is that one embedded, with a cargo warning; with neither, the build stops and says what it needs. `npm ci` runs again when the lock file is newer than the install. `ui/dist` is not committed.
+`build.rs` runs `npm ci` where `ui/node_modules` is missing, then `npm run build` (`tsc` and Vite), and generates a table of `include_bytes!` over `ui/dist`. It builds whenever `ui/package.json` is there and a watched source changed. A crate packaged with only `ui/dist` needs no Node. A UI that does not build stops the build, so a type error cannot ship an old UI. Only where npm cannot run at all and a `ui/dist` exists is that one embedded, with a cargo warning; with neither, the build stops and says what it needs. `npm ci` runs again when the lock file is newer than the install. `ui/dist` is not committed, and `include` in `Cargo.toml` puts it in the crate, which gitignore does not stop once `include` is set. Measured: a crate packaged this way, installed with no Node on `PATH`, served its page and script.
 
 Checking Windows from a Mac (see [that note](checking-windows.md)) relies on the same rule: a copy holding only `ui/dist` builds without Node.
 

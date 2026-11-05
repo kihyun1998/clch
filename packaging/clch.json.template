@@ -1,0 +1,21 @@
+{
+    "version": "{version}",
+    "description": "Find, track and safely clean developer caches and project artifacts",
+    "homepage": "https://github.com/kihyun1998/clch",
+    "license": "MIT OR Apache-2.0",
+    "architecture": {
+        "64bit": {
+            "url": "https://github.com/kihyun1998/clch/releases/download/v{version}/clch-x86_64-pc-windows-msvc.zip",
+            "hash": "{windows_sha256}"
+        }
+    },
+    "bin": "clch.exe",
+    "checkver": "github",
+    "autoupdate": {
+        "architecture": {
+            "64bit": {
+                "url": "https://github.com/kihyun1998/clch/releases/download/v$version/clch-x86_64-pc-windows-msvc.zip"
+            }
+        }
+    }
+}

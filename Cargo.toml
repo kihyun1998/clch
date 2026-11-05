@@ -9,6 +9,15 @@ repository = "https://github.com/kihyun1998/clch"
 readme = "README.md"
 keywords = ["cache", "cleaner", "disk-space", "npm", "cli"]
 categories = ["command-line-utilities", "filesystem"]
+include = [
+    "/src/**",
+    "/build.rs",
+    "/ui/dist/**",
+    "/Cargo.lock",
+    "/README.md",
+    "/LICENSE-APACHE",
+    "/LICENSE-MIT",
+]
 
 [dependencies]
 clap = { version = "4.6", features = ["derive"] }

@@ -1,0 +1,25 @@
+class Clch < Formula
+  desc "Find, track and safely clean developer caches and project artifacts"
+  homepage "https://github.com/kihyun1998/clch"
+  version "{version}"
+  license any_of: ["MIT", "Apache-2.0"]
+
+  on_arm do
+    url "https://github.com/kihyun1998/clch/releases/download/v{version}/clch-aarch64-apple-darwin.tar.gz"
+    sha256 "{aarch64_sha256}"
+  end
+  on_intel do
+    url "https://github.com/kihyun1998/clch/releases/download/v{version}/clch-x86_64-apple-darwin.tar.gz"
+    sha256 "{x86_64_sha256}"
+  end
+
+  depends_on :macos
+
+  def install
+    bin.install "clch"
+  end
+
+  test do
+    assert_match version.to_s, shell_output("#{bin}/clch --version")
+  end
+end

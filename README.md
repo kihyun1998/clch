@@ -2,6 +2,19 @@
 
 Find the disk space developer tooling leaves behind on Windows and macOS, see how it changes over time, and reclaim it safely.
 
+## Install
+
+Every method gives one binary with the dashboard built in. macOS (Apple silicon and Intel) and Windows (x86_64) are supported.
+
+```sh
+brew install kihyun1998/clch/clch             # Homebrew, on macOS
+scoop bucket add clch https://github.com/kihyun1998/scoop-clch
+scoop install clch/clch                       # Scoop, on Windows
+cargo install clch                            # from crates.io; needs no Node.js
+```
+
+Or download a binary for your OS from [GitHub Releases](https://github.com/kihyun1998/clch/releases).
+
 ## Usage
 
 ```sh
@@ -35,7 +48,7 @@ clch dashboard --no-open  # print the URL instead
 
 It shows the same reclaimables per disk with their growth over time, and records a snapshot on each scan. Click what to clean, preview the same plan `clch clean` would print, and confirm. Scan roots can be changed there too. It listens only on 127.0.0.1, on a free port, and its page and every API request need the token in the URL it prints.
 
-Building clch from this repository needs Node.js and npm, for the dashboard's UI.
+Building clch from a clone of this repository needs Node.js and npm, for the dashboard's UI. Installing from crates.io does not.
 
 ## License
 
