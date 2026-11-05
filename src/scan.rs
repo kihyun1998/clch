@@ -19,6 +19,9 @@ pub struct Reclaimable {
     pub kind: Kind,
     pub name: String,
     pub path: PathBuf,
+    /// The folder its tool must run in to act on it, when not the home folder.
+    #[serde(skip)]
+    pub run_from: Option<PathBuf>,
     pub size_bytes: u64,
     /// False when part of it could not be read, making `size_bytes` a lower
     /// bound.
@@ -155,7 +158,7 @@ pub fn run(env: &Env, scope: &Scope) -> Scan {
     let mut measurer = Measurer::default();
     let mut totals: BTreeMap<String, DiskTotal> = BTreeMap::new();
     let mut reclaimables = Vec::new();
-    let mut add = |kind: Kind, id: &str, name: &str, path: PathBuf| {
+    let mut add = |kind: Kind, id: &str, name: &str, path: PathBuf, run_from: Option<PathBuf>| {
         let measured = measurer.measure(&path);
         let disk = disks::of_path(&path);
         add_to_total(&mut totals, disk.as_ref(), &measured);
@@ -178,16 +181,24 @@ pub fn run(env: &Env, scope: &Scope) -> Scan {
             change_bytes: None,
             change_state: ChangeState::Unknown,
             path,
+            run_from,
         });
     };
 
     let mut not_projects = env.application_folders();
     for kind in catalog::tool_caches() {
-        let Some(path) = (kind.locate)(env).filter(|p| p.is_dir()) else {
-            continue;
-        };
-        not_projects.push(path.clone());
-        add(Kind::ToolCache, kind.id, kind.name, path);
+        for located in (kind.locate)(env, &scope.roots) {
+            if located.path.is_dir() {
+                not_projects.push(located.path.clone());
+                add(
+                    Kind::ToolCache,
+                    kind.id,
+                    kind.name,
+                    located.path,
+                    located.run_from,
+                );
+            }
+        }
     }
     let found = discover::find(&scope.roots, &not_projects);
     for artifact in found.artifacts {
@@ -196,6 +207,7 @@ pub fn run(env: &Env, scope: &Scope) -> Scan {
             artifact.kind.id,
             artifact.kind.name,
             artifact.path,
+            None,
         );
     }
     reclaimables.sort_by_key(|r| match r.kind {

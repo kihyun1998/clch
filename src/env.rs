@@ -14,7 +14,7 @@ use crate::process::ToolProcess;
 /// How long a tool may take to answer before clch gives up on it.
 const TOOL_TIMEOUT: Duration = Duration::from_secs(10);
 
-type ToolCall = (String, Vec<String>);
+type ToolCall = (String, Vec<String>, Option<PathBuf>);
 
 /// Per-user folders and tool lookup, read once from the process environment.
 pub struct Env {
@@ -117,20 +117,31 @@ impl Env {
         which::which_in(tool, self.path.as_ref(), &self.cwd).ok()
     }
 
+    /// The value of an environment variable, when it is set and not empty.
+    pub fn var(&self, name: &str) -> Option<OsString> {
+        std::env::var_os(name).filter(|v| !v.is_empty())
+    }
+
     /// The single line `tool args` prints, run from the home folder.
+    pub fn tool_value(&self, tool: &str, args: &[&str]) -> Option<String> {
+        self.tool_value_from(tool, args, self.home.as_deref())
+    }
+
+    /// The single line `tool args` prints, run from `dir`.
     ///
     /// `None` when the tool is absent, fails, times out, or prints anything
     /// other than exactly one non-empty line. Each distinct call runs once per
     /// `Env`.
-    pub fn tool_value(&self, tool: &str, args: &[&str]) -> Option<String> {
+    pub fn tool_value_from(&self, tool: &str, args: &[&str], dir: Option<&Path>) -> Option<String> {
         let key = (
             tool.to_string(),
             args.iter().map(|a| a.to_string()).collect(),
+            dir.map(Path::to_path_buf),
         );
         if let Some(answer) = self.answers.borrow().get(&key) {
             return answer.clone();
         }
-        let answer = match self.ask_tool(tool, args, self.home.as_deref()) {
+        let answer = match self.ask_tool(tool, args, dir) {
             ToolAnswer::Printed(out) => single_line(&out),
             _ => None,
         };
@@ -138,14 +149,31 @@ impl Env {
         answer
     }
 
-    /// Runs `tool args` from the home folder until it finishes, with no time
-    /// limit. `Err` carries what the tool printed, or why it could not start.
-    pub fn run_to_completion(&self, tool: &str, args: &[&str]) -> Result<(), String> {
+    /// The absolute path `tool args` prints, run from `dir`; anything else it
+    /// prints is not believed.
+    pub fn tool_path(&self, tool: &str, args: &[&str], dir: Option<&Path>) -> Option<PathBuf> {
+        self.tool_value_from(tool, args, dir)
+            .map(PathBuf::from)
+            .filter(|path| path.is_absolute())
+    }
+
+    /// Runs `tool args` until it finishes, with no time limit, from `dir` or else
+    /// the home folder. `Err` carries what the tool printed, or why it could not
+    /// start.
+    pub fn run_to_completion(
+        &self,
+        tool: &str,
+        args: &[&str],
+        dir: Option<&Path>,
+    ) -> Result<(), String> {
         let program = self
             .find_tool(tool)
             .ok_or_else(|| format!("{tool} is not on PATH"))?;
         let mut command = self.command(program, args);
         command.stdout(Stdio::piped()).stderr(Stdio::piped());
+        if let Some(dir) = dir.filter(|d| d.is_dir()) {
+            command.current_dir(dir);
+        }
         let output = ToolProcess::spawn(&mut command, false)
             .and_then(ToolProcess::wait_with_output)
             .map_err(|e| format!("could not run {tool}: {e}"))?;

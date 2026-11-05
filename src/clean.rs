@@ -45,9 +45,10 @@ pub struct PlanEntry {
 }
 
 /// How a plan entry is carried out.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 enum Method {
-    Native(&'static str, &'static [&'static str]),
+    /// The tool, its arguments, and the folder to run it in.
+    Native(&'static str, &'static [&'static str], Option<PathBuf>),
     Direct(&'static ProjectArtifactKind),
 }
 
@@ -255,7 +256,10 @@ fn entry(env: &Env, r: &Reclaimable, level: Level) -> PlanEntry {
                 "{} offers no cleanup of only unused data here; use --full to remove all of it",
                 cleanup.tool
             ),
-            Level::Full => format!("{} offers no full cleanup here", cleanup.tool),
+            Level::Full => format!(
+                "{} offers no full cleanup here, only removing what nothing uses",
+                cleanup.tool
+            ),
         };
         return not_cleanable(kind.id, kind.name, reason);
     };
@@ -265,6 +269,19 @@ fn entry(env: &Env, r: &Reclaimable, level: Level) -> PlanEntry {
             kind.name,
             format!("{} is not on PATH", cleanup.tool),
         );
+    }
+    if let Some(below) = cleanup.below_version {
+        let version = env.tool_value(cleanup.tool, &["--version"]);
+        if version
+            .as_deref()
+            .is_none_or(|v| version_at_least(v, below))
+        {
+            let this = version.map_or("its version could not be read".to_string(), |v| {
+                format!("this is {v}")
+            });
+            let reason = format!("needs a {} older than {below}; {this}", cleanup.tool);
+            return not_cleanable(kind.id, kind.name, reason);
+        }
     }
     if let Some(min) = cleanup.min_version {
         let version = env.tool_value(cleanup.tool, &["--version"]);
@@ -299,7 +316,7 @@ fn entry(env: &Env, r: &Reclaimable, level: Level) -> PlanEntry {
         expected_bytes,
         complete: r.complete,
         reason: None,
-        method: Some(Method::Native(cleanup.tool, args)),
+        method: Some(Method::Native(cleanup.tool, args, r.run_from.clone())),
         path: Some(r.path.clone()),
         last_modified_ms: None,
     }
@@ -357,8 +374,10 @@ pub fn execute(env: &Env, plan: Plan, before: &Scan, scope: &Scope) -> (Outcome,
         .plan
         .into_iter()
         .map(|entry| {
-            let run = entry.method.map(|method| match method {
-                Method::Native(tool, args) => env.run_to_completion(tool, args),
+            let run = entry.method.as_ref().map(|method| match method {
+                Method::Native(tool, args, dir) => {
+                    env.run_to_completion(tool, args, dir.as_deref())
+                }
                 Method::Direct(kind) => delete_artifact(entry.path.as_deref(), kind),
             });
             (entry, run)
@@ -448,16 +467,20 @@ fn same_folder(a: &Path, b: &Path) -> bool {
         || matches!((std::fs::canonicalize(a), std::fs::canonicalize(b)), (Ok(a), Ok(b)) if a == b)
 }
 
-/// Checks that git tracks nothing in the folder at `path`, since what git tracks
-/// is not something a toolchain can produce again. Without git, or outside a
-/// repository, nothing is tracked. A git that will not answer counts against
-/// deleting.
+/// Checks that git tracks nothing in the folder at `path`. Without git, or
+/// outside a repository, nothing is tracked. A git that will not answer counts
+/// against deleting. The repository's own `core.fsmonitor` is turned off for the
+/// question.
 fn tracked_by_git(env: &Env, path: &Path) -> Result<(), String> {
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned());
     let (Some(name), Some(parent)) = (name, path.parent()) else {
         return Ok(());
     };
-    match env.ask_tool("git", &["ls-files", "--", &name], Some(parent)) {
+    match env.ask_tool(
+        "git",
+        &["-c", "core.fsmonitor=false", "ls-files", "--", &name],
+        Some(parent),
+    ) {
         ToolAnswer::Absent | ToolAnswer::Failed => Ok(()),
         ToolAnswer::TimedOut => Err("git did not answer whether it tracks this folder".into()),
         ToolAnswer::Printed(files) if files.trim().is_empty() => Ok(()),

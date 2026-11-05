@@ -1,9 +1,10 @@
 //! Every kind of reclaimable clch knows, and where each one lives.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
+use crate::disks;
 use crate::env::Env;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -39,8 +40,28 @@ impl std::str::FromStr for Kind {
 pub struct ToolCacheKind {
     pub id: &'static str,
     pub name: &'static str,
-    pub locate: fn(&Env) -> Option<PathBuf>,
+    /// Finds its instances, given the scan roots.
+    pub locate: fn(&Env, &[PathBuf]) -> Vec<Located>,
+    /// Whether each disk has its own, so that its identity is its path.
+    pub one_per_disk: bool,
     pub cleanup: NativeCleanup,
+}
+
+/// Where an instance of a tool cache is.
+pub struct Located {
+    pub path: PathBuf,
+    /// The folder its tool must run in to act on this instance, when not the
+    /// home folder.
+    pub run_from: Option<PathBuf>,
+}
+
+impl Located {
+    fn at(path: PathBuf) -> Located {
+        Located {
+            path,
+            run_from: None,
+        }
+    }
 }
 
 /// The owning tool's own cleanup commands, per cleanup level. `None` where
@@ -52,6 +73,8 @@ pub struct NativeCleanup {
     /// The oldest tool version that has these commands, as `tool --version`
     /// prints it.
     pub min_version: Option<&'static str>,
+    /// The first tool version that no longer has them.
+    pub below_version: Option<&'static str>,
 }
 
 pub fn tool_caches() -> &'static [ToolCacheKind] {
@@ -60,22 +83,65 @@ pub fn tool_caches() -> &'static [ToolCacheKind] {
             id: "npm-cache",
             name: "npm cache",
             locate: npm::cache,
+            one_per_disk: false,
             cleanup: NativeCleanup {
                 tool: "npm",
                 unused: Some(&["cache", "verify"]),
                 full: Some(&["cache", "clean", "--force"]),
                 min_version: None,
+                below_version: None,
             },
         },
         ToolCacheKind {
             id: "npx-cache",
             name: "npx cache",
             locate: npm::npx_cache,
+            one_per_disk: false,
             cleanup: NativeCleanup {
                 tool: "npm",
                 unused: None,
                 full: Some(&["cache", "npx", "rm", "--force"]),
                 min_version: Some("11.2.0"),
+                below_version: None,
+            },
+        },
+        ToolCacheKind {
+            id: "pnpm-store",
+            name: "pnpm store",
+            locate: pnpm::stores,
+            one_per_disk: true,
+            cleanup: NativeCleanup {
+                tool: "pnpm",
+                unused: Some(&["store", "prune"]),
+                full: None,
+                min_version: None,
+                below_version: None,
+            },
+        },
+        ToolCacheKind {
+            id: "yarn-cache",
+            name: "yarn cache",
+            locate: yarn::classic,
+            one_per_disk: false,
+            cleanup: NativeCleanup {
+                tool: "yarn",
+                unused: None,
+                full: Some(&["cache", "clean"]),
+                min_version: None,
+                below_version: Some("2.0.0"),
+            },
+        },
+        ToolCacheKind {
+            id: "yarn-berry-cache",
+            name: "yarn Berry cache",
+            locate: yarn::berry,
+            one_per_disk: false,
+            cleanup: NativeCleanup {
+                tool: "yarn",
+                unused: None,
+                full: Some(&["cache", "clean", "--all"]),
+                min_version: Some("2.0.0"),
+                below_version: None,
             },
         },
     ]
@@ -119,8 +185,12 @@ mod npm {
     /// (`%LOCALAPPDATA%\npm-cache` on Windows, falling back to
     /// `~\npm-cache`; `~/.npm` elsewhere).
     fn cache_root(env: &Env) -> Option<PathBuf> {
-        if let Some(reported) = env.tool_value("npm", &["config", "get", "cache"]) {
-            return Some(PathBuf::from(reported));
+        if let Some(reported) = env.tool_path(
+            "npm",
+            &["config", "get", "cache"],
+            env.home().map(PathBuf::as_path),
+        ) {
+            return Some(reported);
         }
         if cfg!(windows) {
             env.local_app_data()
@@ -131,11 +201,147 @@ mod npm {
         }
     }
 
-    pub fn cache(env: &Env) -> Option<PathBuf> {
-        cache_root(env).map(|root| root.join("_cacache"))
+    pub fn cache(env: &Env, _roots: &[PathBuf]) -> Vec<Located> {
+        cache_root(env)
+            .map(|root| Located::at(root.join("_cacache")))
+            .into_iter()
+            .collect()
     }
 
-    pub fn npx_cache(env: &Env) -> Option<PathBuf> {
-        cache_root(env).map(|root| root.join("_npx"))
+    pub fn npx_cache(env: &Env, _roots: &[PathBuf]) -> Vec<Located> {
+        cache_root(env)
+            .map(|root| Located::at(root.join("_npx")))
+            .into_iter()
+            .collect()
+    }
+}
+
+mod pnpm {
+    use super::*;
+
+    /// One store per disk. The one for the disk with the home folder is what pnpm
+    /// reports from there, else pnpm's default. On any other disk a scan root is
+    /// on, it is `.pnpm-store` at the disk's root, and pnpm is asked and run from
+    /// inside it: a project's folder may hold code and settings pnpm would act on.
+    pub fn stores(env: &Env, roots: &[PathBuf]) -> Vec<Located> {
+        let reported = env
+            .tool_path("pnpm", &["store", "path"], env.home().map(PathBuf::as_path))
+            .map(|store| store_folder(&store));
+        let mut stores: Vec<Located> = reported
+            .or_else(|| default_store(env))
+            .map(Located::at)
+            .into_iter()
+            .collect();
+        for root in roots {
+            let Some(disk) = disks::of_path(root) else {
+                continue;
+            };
+            let store = PathBuf::from(disk.name).join(".pnpm-store");
+            if store.is_dir() && !stores.iter().any(|known| known.path == store) {
+                stores.push(Located {
+                    run_from: Some(store.clone()),
+                    path: store,
+                });
+            }
+        }
+        stores
+    }
+
+    /// The folder holding every version's store, from the versioned one pnpm
+    /// reports, such as `store/v10`.
+    fn store_folder(reported: &Path) -> PathBuf {
+        let versioned = reported
+            .file_name()
+            .map(|n| n.to_string_lossy())
+            .and_then(|n| n.strip_prefix('v').map(|d| d.parse::<u32>().is_ok()));
+        match (versioned, reported.parent()) {
+            (Some(true), Some(parent)) => parent.to_path_buf(),
+            _ => reported.to_path_buf(),
+        }
+    }
+
+    fn default_store(env: &Env) -> Option<PathBuf> {
+        if let Some(pnpm_home) = env.var("PNPM_HOME") {
+            return Some(PathBuf::from(pnpm_home).join("store"));
+        }
+        if let Some(data) = env.var("XDG_DATA_HOME") {
+            return Some(PathBuf::from(data).join("pnpm").join("store"));
+        }
+        let home = env.home()?;
+        Some(if cfg!(windows) {
+            home.join("AppData")
+                .join("Local")
+                .join("pnpm")
+                .join("store")
+        } else {
+            home.join("Library").join("pnpm").join("store")
+        })
+    }
+}
+
+mod yarn {
+    use super::*;
+
+    /// Whether the yarn on `PATH` is Classic, by its major version.
+    fn is_classic(env: &Env) -> Option<bool> {
+        let version = env.tool_value("yarn", &["--version"])?;
+        let major = version.split('.').next()?.parse::<u32>().ok()?;
+        Some(major < 2)
+    }
+
+    /// What Classic reports when it is the yarn on `PATH`, else its default.
+    pub fn classic(env: &Env, _roots: &[PathBuf]) -> Vec<Located> {
+        let reported = (is_classic(env) == Some(true))
+            .then(|| env.tool_path("yarn", &["cache", "dir"], env.home().map(PathBuf::as_path)))
+            .flatten();
+        reported
+            .or_else(|| {
+                let root = if cfg!(windows) {
+                    env.local_app_data()
+                        .cloned()
+                        .or_else(|| env.home().map(|h| h.join("AppData").join("Local")))?
+                        .join("Yarn")
+                        .join("Cache")
+                } else if let Some(cache) = env.var("XDG_CACHE_HOME") {
+                    PathBuf::from(cache).join("yarn")
+                } else {
+                    env.home()?.join("Library").join("Caches").join("Yarn")
+                };
+                Some(root.join("v6"))
+            })
+            .map(Located::at)
+            .into_iter()
+            .collect()
+    }
+
+    /// What Berry reports when it is the yarn on `PATH`, else its default.
+    pub fn berry(env: &Env, _roots: &[PathBuf]) -> Vec<Located> {
+        let reported = (is_classic(env) == Some(false))
+            .then(|| {
+                env.tool_path(
+                    "yarn",
+                    &["config", "get", "cacheFolder"],
+                    env.home().map(PathBuf::as_path),
+                )
+            })
+            .flatten();
+        reported
+            .or_else(|| {
+                let global = if cfg!(windows) {
+                    env.local_app_data()
+                        .cloned()
+                        .or_else(|| env.home().map(|h| h.join("AppData").join("Local")))?
+                        .join("Yarn")
+                        .join("Berry")
+                } else if let Some(data) = env.var("XDG_DATA_HOME") {
+                    PathBuf::from(data).join("yarn").join("berry")
+                } else {
+                    env.home()?.join(".yarn").join("berry")
+                };
+                Some(global.join("cache"))
+            })
+            .map(Located::at)
+            .into_iter()
+            .collect()
     }
 }

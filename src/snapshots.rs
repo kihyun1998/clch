@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use rusqlite::{Connection, ErrorCode, TransactionBehavior, params};
 use serde::Serialize;
 
-use crate::catalog::Kind;
+use crate::catalog::{self, Kind};
 use crate::env::Env;
 use crate::scan::{ChangeState, Scan, UNKNOWN_DISK};
 
@@ -293,12 +293,14 @@ fn should_be_found(row: &LastSeen, scan: &Scan) -> bool {
 }
 
 /// What makes a reclaimable the same one across snapshots: a tool cache is one
-/// per machine wherever it lives, a project artifact is the one at its path.
+/// per machine wherever it lives, unless each disk has its own; a project
+/// artifact is the one at its path.
 fn identity(kind: Kind, id: &str, path: &str) -> (String, Option<String>) {
-    match kind {
-        Kind::ToolCache => (id.to_string(), None),
-        Kind::ProjectArtifact => (id.to_string(), Some(path.to_string())),
-    }
+    let one_of_many = match kind {
+        Kind::ToolCache => catalog::tool_cache(id).is_some_and(|k| k.one_per_disk),
+        Kind::ProjectArtifact => true,
+    };
+    (id.to_string(), one_of_many.then(|| path.to_string()))
 }
 
 enum Migration {

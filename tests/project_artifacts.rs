@@ -712,8 +712,8 @@ fn another_artifact_or_a_hidden_folder_does_not_make_a_project_recent() {
 fn git_tracking_everything(sb: &Sandbox) {
     sb.fake_tool(
         "git",
-        "case \"$1\" in ls-files) echo node_modules/dep/index.js ;; esac",
-        "if \"%~1\"==\"ls-files\" echo node_modules/dep/index.js",
+        "case \"$*\" in *ls-files*) echo node_modules/dep/index.js ;; esac",
+        "echo %* | findstr ls-files >nul && echo node_modules/dep/index.js",
     );
 }
 
@@ -1271,4 +1271,37 @@ fn something_deleted_by_hand_before_a_cleanup_is_still_reported_gone_once() {
 
     let second = sb.json(&["scan"]);
     assert_eq!(second["gone"].as_array().unwrap().len(), 0);
+}
+
+#[cfg(unix)]
+#[test]
+fn asking_git_does_not_run_what_a_cloned_repositorys_config_names() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let sb = Sandbox::new();
+    let dir = roots(&sb);
+    let modules = sb.node_project(&dir.join("app"), 1);
+    let ran = sb.root().join("ran");
+    let script = sb.root().join("evil.sh");
+    std::fs::write(&script, format!("#!/bin/sh\ntouch '{}'\n", ran.display())).unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let git = |args: &[&str]| {
+        let done = std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir.join("app"))
+            .output()
+            .unwrap();
+        assert!(done.status.success());
+    };
+    git(&["init", "-q"]);
+    git(&["config", "core.fsmonitor", script.to_str().unwrap()]);
+
+    sb.clch()
+        .env("PATH", std::env::var("PATH").unwrap())
+        .args(["clean", "node_modules"])
+        .assert()
+        .success();
+
+    assert!(modules.exists());
+    assert!(!ran.exists(), "git ran the repository's fsmonitor");
 }
