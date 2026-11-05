@@ -59,6 +59,7 @@ export function App() {
   const [preview, setPreview] = useState<Preview | null>(null);
   const [cleaning, setCleaning] = useState(false);
   const [outcome, setOutcome] = useState<Outcome | null>(null);
+  const [rootsOpen, setRootsOpen] = useState(false);
 
   const loadHistory = useCallback(async () => {
     try {
@@ -178,6 +179,14 @@ export function App() {
           </button>
         ))}
         <span className="grow" />
+        <button
+          className="link"
+          disabled={busy}
+          aria-expanded={rootsOpen}
+          onClick={() => setRootsOpen((open) => !open)}
+        >
+          Scan roots
+        </button>
         <button className="link" onClick={() => void run()} disabled={busy}>
           Scan again
         </button>
@@ -241,6 +250,7 @@ export function App() {
               <DiskTrends history={history} disk={disk} />
             )}
             <Growing history={history} items={items} onFocus={setFocused} />
+            {rootsOpen && <ScanRoots roots={scan.scan_roots} onChanged={() => void run()} />}
             <h2>On this disk</h2>
             <ul className="list">
               {items.map((r) => (
@@ -262,6 +272,51 @@ export function App() {
         </main>
       )}
     </div>
+  );
+}
+
+function ScanRoots({ roots, onChanged }: { roots: string[]; onChanged: () => void }) {
+  const [folder, setFolder] = useState("");
+  const [problem, setProblem] = useState<string | null>(null);
+  const change = async (action: "add" | "remove", target: string) => {
+    setProblem(null);
+    try {
+      await post("/api/roots", { action, folder: target });
+      setFolder("");
+      onChanged();
+    } catch (e) {
+      setProblem(e instanceof Error ? e.message : String(e));
+    }
+  };
+  return (
+    <section className="panel" aria-label="Scan roots">
+      <h2>Folders searched for projects</h2>
+      <ul className="roots">
+        {roots.map((root) => (
+          <li key={root}>
+            <span className="path">{root}</span>
+            <button className="link" onClick={() => void change("remove", root)}>Remove</button>
+          </li>
+        ))}
+      </ul>
+      <form
+        className="add"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void change("add", folder);
+        }}
+      >
+        <input
+          aria-label="Folder to add"
+          placeholder="~/code"
+          value={folder}
+          onChange={(e) => setFolder(e.target.value)}
+        />
+        <button disabled={folder.trim() === ""}>Add</button>
+      </form>
+      {problem && <p className="problem" role="alert">{problem}</p>}
+      <p className="path">Changing these scans again.</p>
+    </section>
   );
 }
 
@@ -444,8 +499,7 @@ function Notes({ scan }: { scan: Scan }) {
     <>
       {scan.project_artifacts_skipped && (
         <p className="problem">
-          Project artifacts were not looked for: no scan roots are set. Add one
-          with <code>clch roots add &lt;folder&gt;</code>.
+          Project artifacts were not looked for: no scan roots are set. Add one under Scan roots.
         </p>
       )}
       {scan.unavailable_roots.map((root) => (

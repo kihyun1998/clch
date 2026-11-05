@@ -25,6 +25,10 @@ A CLI preview and its `--yes` are separate runs, so what runs can differ from wh
 
 ADR-0005's rules stay in `clean::plan`: a folder git tracks is skipped as in the CLI, and picking a row is what names it.
 
+## Scan roots
+
+The same functions as `clch roots` change the file, under its lock. `~/` is expanded here, since no shell does it, and a relative path is refused: the server's current folder means nothing to the person. A change scans again, since the map depends on the roots. The panel lists what is configured, not a one-off's roots, as the dashboard has none.
+
 ## Stopping
 
 Ctrl+C is the system's default for the process. Nothing needs saving: a snapshot is written in one SQLite transaction, and a tool running then shares the process group as it does for the CLI.

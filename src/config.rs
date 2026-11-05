@@ -165,3 +165,51 @@ pub fn configured_scope(env: &Env) -> Result<Scope, ConfigError> {
         one_off: false,
     })
 }
+
+/// Why a scan root could not be changed.
+#[derive(Debug)]
+pub enum RootError {
+    Config(ConfigError),
+    NotAFolder(PathBuf),
+    NotARoot(PathBuf),
+}
+
+impl fmt::Display for RootError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            RootError::Config(e) => write!(f, "{e}"),
+            RootError::NotAFolder(p) => write!(f, "{} is not a folder", p.display()),
+            RootError::NotARoot(p) => write!(f, "{} is not a scan root", p.display()),
+        }
+    }
+}
+
+impl From<ConfigError> for RootError {
+    fn from(e: ConfigError) -> Self {
+        RootError::Config(e)
+    }
+}
+
+/// Adds `folder`, an absolute path, to the scan roots in the settings file.
+pub fn add_root(env: &Env, folder: &Path) -> Result<(), RootError> {
+    if !folder.is_dir() {
+        return Err(RootError::NotAFolder(folder.to_path_buf()));
+    }
+    let _held = lock(env)?;
+    let mut config = Config::load(env)?;
+    if config.add_scan_root(env, folder) {
+        config.save()?;
+    }
+    Ok(())
+}
+
+/// Removes `folder`, an absolute path, from the scan roots in the settings file.
+pub fn remove_root(env: &Env, folder: &Path) -> Result<(), RootError> {
+    let _held = lock(env)?;
+    let mut config = Config::load(env)?;
+    if !config.remove_scan_root(env, folder) {
+        return Err(RootError::NotARoot(folder.to_path_buf()));
+    }
+    config.save()?;
+    Ok(())
+}

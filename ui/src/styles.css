@@ -47,6 +47,10 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .kind-cache { background-color: #008300; color: #fff; }
 
 .side { overflow: auto; min-height: 0; }
+.roots { list-style: none; margin: 0 0 8px; padding: 0; }
+.roots li { display: flex; gap: 8px; justify-content: space-between; align-items: baseline; }
+.add { display: flex; gap: 8px; }
+.add input { flex: 1; min-width: 0; font: inherit; background: var(--ground); color: var(--text); border: 1px solid var(--line); padding: 4px 6px; }
 .banner { padding: 0 20px; }
 .quiet { color: var(--muted); }
 .trend { margin: 10px 0 0; }

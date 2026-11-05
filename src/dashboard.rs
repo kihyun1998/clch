@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use tiny_http::{Header, Method, Request, Response, Server};
 
 use crate::clean::{self, Level, Plan, PlanSignature, Selection};
-use crate::config;
+use crate::config::{self, RootError};
 use crate::env::Env;
 use crate::scan::Scan;
 use crate::{scan, snapshots};
@@ -62,6 +62,17 @@ struct CleanupRequest {
     plan_id: String,
     #[serde(default)]
     confirm: bool,
+}
+
+#[derive(Deserialize)]
+struct RootChange {
+    action: String,
+    folder: String,
+}
+
+#[derive(Serialize)]
+struct RootsReply {
+    scan_roots: Vec<PathBuf>,
 }
 
 #[derive(Serialize)]
@@ -189,6 +200,12 @@ fn api(guard: &Guard, request: &mut Request, path: &str) -> Reply {
             Err(reply) => reply,
         },
         ("/api/cleanup", _) => error(405, "use POST"),
+        ("/api/roots", Method::Get) => read_roots(),
+        ("/api/roots", Method::Post) => match body(request) {
+            Ok(wanted) => change_roots(wanted),
+            Err(reply) => reply,
+        },
+        ("/api/roots", _) => error(405, "use GET or POST"),
         ("/api/scan", Method::Post) => run_scan(guard),
         ("/api/scan", _) => error(405, "use POST"),
         ("/api/history", Method::Get) => read_history(),
@@ -350,6 +367,42 @@ fn run_scan(guard: &Guard) -> Reply {
     let reply = json(200, &result);
     *guard.latest.lock().expect("no thread panics holding this") = Some(result);
     reply
+}
+
+fn read_roots() -> Reply {
+    match config::configured_scope(&Env::from_process()) {
+        Ok(scope) => json(
+            200,
+            &RootsReply {
+                scan_roots: scope.roots,
+            },
+        ),
+        Err(e) => error(500, &e.to_string()),
+    }
+}
+
+fn change_roots(wanted: RootChange) -> Reply {
+    let env = Env::from_process();
+    let folder = match wanted.folder.strip_prefix("~/") {
+        Some(rest) => match env.home() {
+            Some(home) => home.join(rest),
+            None => return error(500, "no home folder"),
+        },
+        None => PathBuf::from(&wanted.folder),
+    };
+    if !folder.is_absolute() {
+        return error(400, "give a full path, or one starting with ~/");
+    }
+    let changed = match wanted.action.as_str() {
+        "add" => config::add_root(&env, &folder),
+        "remove" => config::remove_root(&env, &folder),
+        _ => return error(400, "the action is add or remove"),
+    };
+    match changed {
+        Ok(()) => read_roots(),
+        Err(RootError::Config(e)) => error(500, &e.to_string()),
+        Err(e) => error(400, &e.to_string()),
+    }
 }
 
 fn read_history() -> Reply {

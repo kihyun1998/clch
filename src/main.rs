@@ -4,7 +4,7 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 
 use clch::clean::{self, BadName, Level, Selection};
-use clch::config::{self, Config, ConfigError};
+use clch::config::{self, Config, ConfigError, RootError};
 use clch::scan::Scope;
 use clch::{dashboard, env::Env, output, scan, snapshots};
 
@@ -101,34 +101,11 @@ fn scope(env: &Env, roots: Vec<PathBuf>) -> Result<Scope, ConfigError> {
 }
 
 fn run_roots(env: &Env, command: RootsCommand) -> Result<ExitCode, ConfigError> {
-    let changing = !matches!(command, RootsCommand::List { .. });
-    let _held = if changing {
-        Some(config::lock(env)?)
-    } else {
-        None
-    };
-    let mut config = Config::load(env)?;
-    match command {
-        RootsCommand::Add { folder } => {
-            let folder = env.absolute(&folder);
-            if !folder.is_dir() {
-                eprintln!("error: {} is not a folder", folder.display());
-                return Ok(ExitCode::from(2));
-            }
-            if config.add_scan_root(env, &folder) {
-                config.save()?;
-            }
-        }
-        RootsCommand::Remove { folder } => {
-            let folder = env.absolute(&folder);
-            if !config.remove_scan_root(env, &folder) {
-                eprintln!("error: {} is not a scan root", folder.display());
-                return Ok(ExitCode::from(2));
-            }
-            config.save()?;
-        }
+    let changed = match command {
+        RootsCommand::Add { folder } => config::add_root(env, &env.absolute(&folder)),
+        RootsCommand::Remove { folder } => config::remove_root(env, &env.absolute(&folder)),
         RootsCommand::List { json } => {
-            let scan_roots = config.scan_roots(env);
+            let scan_roots = Config::load(env)?.scan_roots(env);
             if json {
                 print_json(&RootsList { scan_roots });
             } else {
@@ -136,9 +113,17 @@ fn run_roots(env: &Env, command: RootsCommand) -> Result<ExitCode, ConfigError> 
                     println!("{}", root.display());
                 }
             }
+            Ok(())
+        }
+    };
+    match changed {
+        Ok(()) => Ok(ExitCode::SUCCESS),
+        Err(RootError::Config(e)) => Err(e),
+        Err(e) => {
+            eprintln!("error: {e}");
+            Ok(ExitCode::from(2))
         }
     }
-    Ok(ExitCode::SUCCESS)
 }
 
 fn print_json(value: &impl serde::Serialize) {
