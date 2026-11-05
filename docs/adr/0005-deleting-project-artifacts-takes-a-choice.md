@@ -11,3 +11,5 @@ The maintainer decided three things on 2026-11-05, shown reproductions of what t
 ## Consequences
 
 Scans read each project's files as well. Untracked hand edits inside a `node_modules` still cannot be detected, and a project used without edits still looks old. Reinstalling at a pnpm workspace root is needed after deleting its `node_modules`, since members link into it; clch does not warn about that yet.
+
+The stop for a kind's name was later widened from a folder of that name to any folder inside a project of that kind, since from a workspace member `clean target --yes` reached every root. It is the same call, made to hold where it was first shown not to.

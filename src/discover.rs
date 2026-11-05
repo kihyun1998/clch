@@ -60,12 +60,11 @@ pub fn find(roots: &[PathBuf], not_projects: &[PathBuf]) -> Discovery {
     discovery
 }
 
-/// The kind of project artifact `path` is, by its name and its marker file.
+/// The kind of project artifact `path` is, when it is one.
 fn artifact_kind(path: &Path) -> Option<&'static ProjectArtifactKind> {
     let name = path.file_name()?.to_string_lossy();
     let kind = named(&name)?;
-    let parent = path.parent()?;
-    has_marker(kind, parent).then_some(kind)
+    is_artifact(kind, path).then_some(kind)
 }
 
 fn named(name: &str) -> Option<&'static ProjectArtifactKind> {
@@ -74,8 +73,26 @@ fn named(name: &str) -> Option<&'static ProjectArtifactKind> {
         .find(|k| k.dir_name == name)
 }
 
-fn has_marker(kind: &ProjectArtifactKind, dir: &Path) -> bool {
-    kind.markers.iter().any(|m| dir.join(m).is_file())
+/// Whether the folder at `path` shows what `kind` asks for: a marker beside it,
+/// any line or file the kind names, and no repository of its own.
+pub fn is_artifact(kind: &ProjectArtifactKind, path: &Path) -> bool {
+    let Some(dir) = path.parent() else {
+        return false;
+    };
+    if path.join(".git").exists() {
+        return false;
+    }
+    let marked = kind.markers.iter().any(|m| {
+        let marker = dir.join(m);
+        marker.is_file() && kind.marker_line.is_none_or(|line| has_line(&marker, line))
+    });
+    marked && (kind.inside.is_empty() || kind.inside.iter().any(|e| path.join(e).is_file()))
+}
+
+/// Whether a line of the file, leading spaces aside, is exactly `line`.
+fn has_line(file: &Path, line: &str) -> bool {
+    fs::read_to_string(file)
+        .is_ok_and(|text| text.lines().any(|l| l.trim_end().trim_start() == line))
 }
 
 struct Search<'a> {
@@ -112,13 +129,13 @@ impl Search<'_> {
             let name = name.to_string_lossy();
             let path = entry.path();
             if let Some(kind) = named(&name) {
-                if has_marker(kind, dir) {
+                if is_artifact(kind, &path) {
                     if self.seen.insert(real_child) {
                         self.artifacts.push(Found { path, kind });
                     }
                     continue;
                 }
-                if !kind.search_unmarked {
+                if !kind.search_otherwise {
                     continue;
                 }
             }
@@ -175,11 +192,24 @@ fn walk_project(dir: &Path, age: &mut ProjectAge) {
         } else if meta.is_dir() {
             let name = entry.file_name();
             let name = name.to_string_lossy();
-            if !name.starts_with('.') && named(&name).is_none() {
-                walk_project(&entry.path(), age);
+            let path = entry.path();
+            let artifact = named(&name).is_some_and(|kind| is_artifact(kind, &path));
+            if !name.starts_with('.') && !artifact {
+                walk_project(&path, age);
             }
         }
     }
+}
+
+/// Whether `dir` or a folder above it holds a marker of `kind`.
+pub fn inside_project_of(kind: &ProjectArtifactKind, dir: &Path) -> bool {
+    dir.ancestors()
+        .any(|folder| kind.markers.iter().any(|m| folder.join(m).is_file()))
+}
+
+/// Whether `dir` or a folder above it holds a git repository.
+pub fn inside_repository(dir: &Path) -> bool {
+    dir.ancestors().any(|folder| folder.join(".git").exists())
 }
 
 /// Whether another disk is mounted somewhere inside `dir`.

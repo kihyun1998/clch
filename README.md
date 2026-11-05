@@ -20,7 +20,7 @@ clch clean ~/code/app/node_modules --yes        # delete one
 clch clean --older-than-days 30 --yes           # delete artifacts in projects not changed for 30 days
 ```
 
-Project artifacts are deleted only when you name them or pick them by age; `clch clean --yes` alone leaves them alone. Deleting is permanent, since moving them to the Trash would give no space back. A folder counts as a project artifact only when its marker file sits beside it, such as `package.json` beside `node_modules`, and one git tracks files in is skipped.
+Project artifacts are deleted only when you name them or pick them by age; `clch clean --yes` alone leaves them alone. Deleting is permanent, since moving them to the Trash would give no space back. A folder counts as a project artifact only when its marker file sits beside it, such as `package.json` beside `node_modules`, and each kind asks for its own further evidence, such as `pyvenv.cfg` in a `.venv`. One git tracks files in, or that is a repository itself, is skipped. The kinds are `node_modules`, `target`, `.venv`, `.dart_tool`, and Flutter's `build`.
 
 A cleanup that fails is reported with the tool's output and makes `clch clean` exit with status 1; the others still run.
 

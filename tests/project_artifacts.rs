@@ -699,6 +699,7 @@ fn another_artifact_or_a_hidden_folder_does_not_make_a_project_recent() {
     let sb = Sandbox::new();
     let dir = roots(&sb);
     let modules = sb.node_project(&dir.join("app"), 1);
+    sb.node_project(&dir.join("app/lib"), 1);
     age(dir.join("app").as_path(), 90);
     sb.write_file(&dir.join("app/.git/index"), 1);
     sb.write_file(&dir.join("app/lib/node_modules/fresh"), 1);

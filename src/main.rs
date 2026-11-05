@@ -201,8 +201,9 @@ fn run(env: &Env, command: Command) -> Result<ExitCode, ConfigError> {
                 }
                 Err(BadName::Ambiguous(name)) => {
                     eprintln!(
-                        "error: '{name}' is a folder here as well as a kind of project artifact. \
-                         Use ./{name} for this one, or run from another folder for all of them."
+                        "error: '{name}' would mean every one under the scan roots, and this folder is \
+                         part of a project of that kind. Use a path such as ./{name} for one, or \
+                         run from outside the project for all of them."
                     );
                     return Ok(ExitCode::from(2));
                 }

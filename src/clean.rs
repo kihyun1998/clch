@@ -169,7 +169,10 @@ pub fn plan(env: &Env, scan: &Scan, selection: &Selection, level: Level) -> Resu
         if !is_kind(name) && !is_path {
             return Err(BadName::Unknown((*name).clone()));
         }
-        if catalog::project_artifact(name).is_some() && path_of(name).is_dir() {
+        if let Some(kind) = catalog::project_artifact(name)
+            && (path_of(name).is_dir()
+                || discover::inside_project_of(kind, &env.absolute(Path::new("."))))
+        {
             return Err(BadName::Ambiguous((*name).clone()));
         }
     }
@@ -504,8 +507,8 @@ fn same_folder(a: &Path, b: &Path) -> bool {
 }
 
 /// Checks that git tracks nothing in the folder at `path`. Without git, or
-/// outside a repository, nothing is tracked. A git that will not answer counts
-/// against deleting. The repository's own `core.fsmonitor` is turned off for the
+/// outside a repository, nothing is tracked. A git that will not answer, or that
+/// fails inside a repository, counts against deleting. The repository's own `core.fsmonitor` is turned off for the
 /// question.
 fn tracked_by_git(env: &Env, path: &Path) -> Result<(), String> {
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned());
@@ -517,7 +520,9 @@ fn tracked_by_git(env: &Env, path: &Path) -> Result<(), String> {
         &["-c", "core.fsmonitor=false", "ls-files", "--", &name],
         Some(parent),
     ) {
-        ToolAnswer::Absent | ToolAnswer::Failed => Ok(()),
+        ToolAnswer::Absent => Ok(()),
+        ToolAnswer::Failed if !discover::inside_repository(parent) => Ok(()),
+        ToolAnswer::Failed => Err("git could not say whether it tracks this folder".into()),
         ToolAnswer::TimedOut => Err("git did not answer whether it tracks this folder".into()),
         ToolAnswer::Printed(files) if files.trim().is_empty() => Ok(()),
         ToolAnswer::Printed(_) => Err("git tracks files in this folder".into()),
@@ -600,16 +605,15 @@ const IGNORED_ENTRIES: [&str; 2] = [".DS_Store", "Thumbs.db"];
 /// Links inside it are removed, not followed.
 fn delete_artifact(path: Option<&Path>, kind: &ProjectArtifactKind) -> Result<(), String> {
     let path = path.ok_or("no path to delete")?;
-    let parent = path.parent().ok_or("no folder around it")?;
     let meta = std::fs::symlink_metadata(path).map_err(|e| e.to_string())?;
     if !meta.is_dir() {
         return Err(format!("{} is no longer a folder", path.display()));
     }
-    if !kind.markers.iter().any(|m| parent.join(m).is_file()) {
+    if !discover::is_artifact(kind, path) {
         return Err(format!(
-            "{} no longer has {} beside it",
+            "{} no longer looks like a {}",
             path.display(),
-            kind.markers.join(" or ")
+            kind.name
         ));
     }
     if discover::holds_another_disk(path) {
@@ -630,6 +634,18 @@ mod tests {
     use super::{catalog, delete_artifact, version_at_least};
 
     #[test]
+    fn a_folder_that_lost_its_evidence_since_the_plan_is_not_deleted() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("Cargo.toml"), "").unwrap();
+        let target = dir.path().join("target");
+        std::fs::create_dir(&target).unwrap();
+        let kind = catalog::project_artifact("target").unwrap();
+
+        assert!(delete_artifact(Some(&target), kind).is_err());
+        assert!(target.exists());
+    }
+
+    #[test]
     fn a_folder_that_lost_its_marker_since_the_plan_is_not_deleted() {
         let dir = tempfile::tempdir().unwrap();
         let modules = dir.path().join("node_modules");
@@ -638,7 +654,7 @@ mod tests {
 
         let result = delete_artifact(Some(&modules), kind);
 
-        assert!(result.unwrap_err().contains("package.json"));
+        assert!(result.unwrap_err().contains("no longer looks like"));
         assert!(modules.exists());
     }
 

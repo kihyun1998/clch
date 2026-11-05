@@ -275,27 +275,72 @@ pub fn tool_cache(id: &str) -> Option<&'static ToolCacheKind> {
     tool_caches().iter().find(|k| k.id == id)
 }
 
-/// One kind of project artifact: the folder's name and the files, any of
-/// which beside it marks it as what its toolchain produced.
+/// One kind of project artifact: the folder's name, and what shows that a folder
+/// of that name is what its toolchain produced.
 #[derive(Debug)]
 pub struct ProjectArtifactKind {
     pub id: &'static str,
     pub name: &'static str,
     pub dir_name: &'static str,
+    /// Files any one of which must sit beside it.
     pub markers: &'static [&'static str],
-    /// Whether a folder of this name without a marker may still hold
+    /// A line the marker must have, when the marker alone does not say so.
+    pub marker_line: Option<&'static str>,
+    /// Entries any one of which must be inside it; empty when none is reliable.
+    pub inside: &'static [&'static str],
+    /// Whether a folder of this name that is not an artifact may still hold
     /// projects, and so is searched.
-    pub search_unmarked: bool,
+    pub search_otherwise: bool,
 }
 
 pub fn project_artifacts() -> &'static [ProjectArtifactKind] {
-    &[ProjectArtifactKind {
-        id: "node_modules",
-        name: "node_modules",
-        dir_name: "node_modules",
-        markers: &["package.json"],
-        search_unmarked: false,
-    }]
+    &[
+        ProjectArtifactKind {
+            id: "node_modules",
+            name: "node_modules",
+            dir_name: "node_modules",
+            markers: &["package.json"],
+            marker_line: None,
+            inside: &[],
+            search_otherwise: false,
+        },
+        ProjectArtifactKind {
+            id: "target",
+            name: "Cargo target",
+            dir_name: "target",
+            markers: &["Cargo.toml"],
+            marker_line: None,
+            inside: &["CACHEDIR.TAG", ".rustc_info.json"],
+            search_otherwise: true,
+        },
+        ProjectArtifactKind {
+            id: ".venv",
+            name: "Python .venv",
+            dir_name: ".venv",
+            markers: &["pyproject.toml", "requirements.txt"],
+            marker_line: None,
+            inside: &["pyvenv.cfg"],
+            search_otherwise: false,
+        },
+        ProjectArtifactKind {
+            id: ".dart_tool",
+            name: "Dart .dart_tool",
+            dir_name: ".dart_tool",
+            markers: &["pubspec.yaml"],
+            marker_line: None,
+            inside: &["package_config.json"],
+            search_otherwise: false,
+        },
+        ProjectArtifactKind {
+            id: "build",
+            name: "Flutter build",
+            dir_name: "build",
+            markers: &["pubspec.yaml"],
+            marker_line: Some("sdk: flutter"),
+            inside: &[],
+            search_otherwise: true,
+        },
+    ]
 }
 
 pub fn project_artifact(id: &str) -> Option<&'static ProjectArtifactKind> {
