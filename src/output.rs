@@ -236,6 +236,15 @@ pub fn plan_table(plan: &Plan) -> String {
         ["NAME", "ACTION", "SPACE", "LAST CHANGED", "PATH"],
         &rows,
     ));
+    let mut warned: Vec<&str> = Vec::new();
+    for entry in &plan.plan {
+        if let Some(warning) = entry.warning.as_deref()
+            && !warned.contains(&warning)
+        {
+            warned.push(warning);
+            out.push_str(&format!("\nWarning: {warning}\n"));
+        }
+    }
     if plan.expected_total_bytes > 0 {
         out.push_str(&format!(
             "\nFrees at most {}.\n",

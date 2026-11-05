@@ -43,7 +43,7 @@ Classic and Berry are separate reclaimables, because a cache left by the one not
 - **No command.** `cargo clean gc` exists but fails on the stable channel as unstable (cargo 1.97), so `cargo` is not run at all.
 - **A full cleanup deletes the folder** (ADR-0006). Cargo Home's docs: "you can always remove any part of the cache and Cargo will do its best to restore sources".
 - **`registry` and `git` are the reclaimables**, not all of Cargo Home, which also holds installed binaries and credentials. Either is deleted only while it holds nothing but Cargo's own entries, since `CARGO_HOME` can point at a folder with other things called `git`.
-- **Deleting during a build breaks that build.** Measured: `cargo build` failed with status 101 when its git cache went mid-compile; the next build succeeded. Nothing checks for a running build.
+- **Deleting during a build breaks that build, and the plan says so.** Measured: `cargo build` failed with status 101, "could not execute process rustc", when its git cache went mid-compile; the next build succeeded. A running build cannot be detected from the lock: `lsof` showed nothing holding `.package-cache` during that compile, as Cargo takes it to fetch, not to build. Cargo's source for the lock was not read.
 
 ## Go
 

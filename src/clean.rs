@@ -35,6 +35,9 @@ pub struct PlanEntry {
     pub complete: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// What a person should know before this runs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<PathBuf>,
     /// When this project artifact's project last changed.
@@ -278,6 +281,7 @@ fn entry(env: &Env, r: &Reclaimable, level: Level) -> PlanEntry {
                 expected_bytes: Some(r.size_bytes),
                 complete: r.complete,
                 reason: None,
+                warning: None,
                 path: Some(r.path.clone()),
                 last_modified_ms: r.last_modified_ms,
                 method: Some(Method::Direct(kind)),
@@ -314,6 +318,7 @@ fn entry(env: &Env, r: &Reclaimable, level: Level) -> PlanEntry {
             expected_bytes: Some(r.size_bytes),
             complete: r.complete,
             reason: None,
+            warning: kind.delete_warning.map(str::to_string),
             method: Some(Method::DeleteCache(deletable)),
             path: Some(r.path.clone()),
             last_modified_ms: None,
@@ -398,6 +403,7 @@ fn entry(env: &Env, r: &Reclaimable, level: Level) -> PlanEntry {
         expected_bytes,
         complete: r.complete,
         reason: None,
+        warning: None,
         method: Some(Method::Native(tool, args, r.run_from.clone())),
         path: Some(r.path.clone()),
         last_modified_ms: None,
@@ -413,6 +419,7 @@ fn not_cleanable(id: &str, name: &str, reason: String) -> PlanEntry {
         expected_bytes: None,
         complete: true,
         reason: Some(reason),
+        warning: None,
         method: None,
         path: None,
         last_modified_ms: None,

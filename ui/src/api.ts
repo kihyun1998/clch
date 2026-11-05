@@ -72,6 +72,7 @@ export interface PlanEntry {
   expected_bytes?: number;
   complete: boolean;
   reason?: string;
+  warning?: string;
   path?: string;
   last_modified_ms?: number;
 }

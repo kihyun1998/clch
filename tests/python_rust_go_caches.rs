@@ -537,3 +537,38 @@ fn a_plan_of_only_tool_caches_being_deleted_does_not_say_project_artifacts() {
         "plan was:\n{text}"
     );
 }
+
+// A running build
+
+fn cargo_cache(sb: &Sandbox, folder: &str, entry: &str) -> PathBuf {
+    let cache = sb.home().join(".cargo").join(folder);
+    sb.write_file(&cache.join(entry).join("file"), 2);
+    cache
+}
+
+#[test]
+fn a_plan_deleting_a_cargo_cache_warns_about_running_builds() {
+    let sb = Sandbox::new();
+    cargo_cache(&sb, "registry", "cache");
+    cargo_cache(&sb, "git", "db");
+
+    for id in ["cargo-registry", "cargo-git"] {
+        let plan = sb.json(&["clean", id, "--full"]);
+        let warning = plan["plan"][0]["warning"].as_str().unwrap_or_default();
+        assert!(warning.contains("build running now"), "{plan}");
+        let table = sb.clch().args(["clean", id, "--full"]).output().unwrap();
+        let table = String::from_utf8_lossy(&table.stdout).into_owned();
+        assert!(table.contains("build running now"), "{table}");
+    }
+}
+
+#[test]
+fn a_plan_not_deleting_a_cargo_cache_has_no_such_warning() {
+    let sb = Sandbox::new();
+    cargo_cache(&sb, "registry", "cache");
+
+    let plan = sb.json(&["clean", "cargo-registry"]);
+
+    assert_eq!(plan["plan"][0]["cleanable"], false);
+    assert!(plan["plan"][0].get("warning").is_none(), "{plan}");
+}

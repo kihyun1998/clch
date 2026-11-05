@@ -362,7 +362,10 @@ function PlanScreen({
                   <div className="path">{lastChanged(e.last_modified_ms)}</div>
                 )}
               </td>
-              <td>{e.cleanable ? <code>{e.action}</code> : `Skipped: ${e.reason}`}</td>
+              <td>
+                {e.cleanable ? <code>{e.action}</code> : `Skipped: ${e.reason}`}
+                {e.warning && <div className="problem">{e.warning}</div>}
+              </td>
               <td className="number">
                 {e.expected_bytes !== undefined
                   ? bounded(e.expected_bytes, e.complete)
