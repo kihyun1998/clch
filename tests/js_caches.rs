@@ -1,53 +1,7 @@
 mod common;
 
-use common::{Sandbox, blocks};
+use common::{Sandbox, blocks, prints, removes, says, tool};
 use std::path::{Path, PathBuf};
-
-/// What a fake tool does for one command line.
-struct Reply {
-    unix: String,
-    windows: String,
-}
-
-fn prints(path: &Path) -> Reply {
-    Reply {
-        unix: format!("echo '{}'", path.display()),
-        windows: format!("echo {}", path.display()),
-    }
-}
-
-fn says(text: &str) -> Reply {
-    Reply {
-        unix: format!("echo {text}"),
-        windows: format!("echo {text}"),
-    }
-}
-
-fn removes(path: &Path) -> Reply {
-    let batch = path.display().to_string().replace('/', "\\");
-    Reply {
-        unix: format!("rm -rf '{}'", path.display()),
-        windows: format!(
-            "if exist \"{batch}\\\" (rmdir /s /q \"{batch}\") else (del /q \"{batch}\")"
-        ),
-    }
-}
-
-/// A fake tool answering exactly these command lines, and nothing otherwise.
-fn tool(sb: &Sandbox, name: &str, replies: Vec<(&str, Reply)>) {
-    let mut unix = String::from("case \"$*\" in\n");
-    let mut windows = String::from("set \"ARGS=%*\"\r\n");
-    let mut labels = String::new();
-    for (i, (args, reply)) in replies.iter().enumerate() {
-        unix.push_str(&format!("  '{args}') {} ;;\n", reply.unix));
-        windows.push_str(&format!("if \"%ARGS%\"==\"{args}\" goto c{i}\r\n"));
-        labels.push_str(&format!(":c{i}\r\n{}\r\nexit /b 0\r\n", reply.windows));
-    }
-    unix.push_str("esac");
-    windows.push_str("exit /b 0\r\n");
-    windows.push_str(&labels);
-    sb.fake_tool(name, &unix, &windows);
-}
 
 fn found<'a>(scan: &'a serde_json::Value, id: &str) -> Vec<&'a serde_json::Value> {
     scan["reclaimables"]
@@ -166,20 +120,75 @@ fn unused_cleanup_prunes_the_store() {
 }
 
 #[test]
-fn pnpm_has_no_full_cleanup_and_says_so() {
+fn pnpm_full_cleanup_deletes_every_versions_store_and_nothing_beside_them() {
     let t = pnpm_at_home();
+    t.sb.write_file(&t.home_store.join("v3/files/left-behind"), 4);
+    t.sb.write_file(&t.home_store.join("notes.txt"), 1);
 
-    let result = t.sb.json(&["clean", "pnpm-store", "--full", "--yes"]);
-
-    assert_eq!(result["results"][0]["status"], "skipped");
+    let plan = t.sb.json(&["clean", "pnpm-store", "--full"]);
     assert!(
-        result["results"][0]["reason"]
+        plan["plan"][0]["action"]
             .as_str()
             .unwrap()
-            .contains("no full cleanup"),
-        "{result}"
+            .contains("delete"),
+        "{plan}"
     );
-    assert!(t.home_store.join("v10/files/kept").exists());
+
+    let result = t.sb.json(&["clean", "pnpm-store", "--full", "--yes"]);
+    assert_eq!(result["results"][0]["status"], "cleaned", "{result}");
+    assert_eq!(result["freed_bytes"], blocks(7));
+    assert!(!t.home_store.join("v10").exists());
+    assert!(!t.home_store.join("v3").exists());
+    assert!(t.home_store.join("notes.txt").exists());
+    assert_eq!(calls_with(&t.sb, "store prune").len(), 0);
+}
+
+#[test]
+fn a_store_dir_pointing_at_a_users_folder_loses_nothing() {
+    let sb = Sandbox::new();
+    let docs = sb.home().join("docs");
+    sb.write_file(&docs.join("precious"), 2);
+    sb.write_file(&docs.join("v2/thesis"), 2);
+    tool(&sb, "pnpm", vec![("store path", prints(&docs.join("v10")))]);
+
+    let plan = sb.json(&["clean", "pnpm-store", "--full"]);
+    assert_eq!(plan["plan"][0]["cleanable"], false, "{plan}");
+
+    let result = sb.json(&["clean", "pnpm-store", "--full", "--yes"]);
+    assert_eq!(result["results"][0]["status"], "skipped");
+    assert!(docs.join("precious").exists());
+    assert!(docs.join("v2/thesis").exists());
+}
+
+#[test]
+fn a_tool_answer_naming_the_home_folder_cannot_delete_it() {
+    let sb = Sandbox::new();
+    sb.write_file(&sb.home().join("v10/files/a"), 1);
+    sb.write_file(&sb.home().join("keep"), 1);
+    tool(
+        &sb,
+        "pnpm",
+        vec![("store path", prints(&sb.home().join("v10")))],
+    );
+
+    let result = sb.json(&["clean", "pnpm-store", "--full", "--yes"]);
+
+    assert_eq!(result["results"][0]["status"], "skipped", "{result}");
+    assert!(sb.home().join("v10/files/a").exists());
+    assert!(sb.home().join("keep").exists());
+}
+
+#[test]
+fn an_empty_cache_stays_out_of_a_plain_plan_but_not_when_named() {
+    let t = pnpm_at_home();
+    std::fs::remove_dir_all(t.home_store.join("v10")).unwrap();
+    std::fs::create_dir_all(t.home_store.join("v10")).unwrap();
+
+    let plain = t.sb.json(&["clean"]);
+    let named = t.sb.json(&["clean", "pnpm-store"]);
+
+    assert_eq!(plain["plan"].as_array().unwrap().len(), 0, "{plain}");
+    assert_eq!(named["plan"].as_array().unwrap().len(), 1, "{named}");
 }
 
 #[test]
@@ -215,7 +224,17 @@ fn without_pnpm_the_default_store_is_found_and_not_cleaned() {
 
     assert_eq!(found(&scan, "pnpm-store")[0]["size_bytes"], blocks(2));
     assert_eq!(plan["plan"][0]["cleanable"], false);
-    assert!(plan["plan"][0]["reason"].as_str().unwrap().contains("pnpm"));
+    assert!(
+        plan["plan"][0]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("--full"),
+        "{plan}"
+    );
+
+    let full = sb.json(&["clean", "pnpm-store", "--full", "--yes"]);
+    assert_eq!(full["results"][0]["status"], "cleaned");
+    assert!(!pnpm_default(&sb).join("v10").exists());
 }
 
 #[test]

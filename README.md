@@ -9,7 +9,7 @@ clch scan          # list every reclaimable with its size and its change since t
 clch scan --json   # the same, as JSON
 clch clean         # show what cleaning would do; nothing is removed
 clch clean --yes   # clean: only what nothing uses, through each tool's own command
-clch clean npm-cache --full --yes   # remove all of one reclaimable (also npx-cache, yarn-cache, yarn-berry-cache)
+clch clean npm-cache --full --yes   # remove all of one reclaimable; see the ids with `clch scan --json`
 clch clean pnpm-store --yes        # prune the pnpm store on each disk a scan root is on
 
 clch roots add ~/code              # search a folder for project artifacts

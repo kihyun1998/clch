@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
-use crate::catalog::{self, Kind, ProjectArtifactKind, ToolCacheKind};
+use crate::catalog::{self, Deletable, Kind, ProjectArtifactKind, ToolCacheKind};
 use crate::discover;
 use crate::env::{Env, ToolAnswer};
 use crate::scan::{self, Reclaimable, Scan, Scope};
@@ -50,6 +50,8 @@ enum Method {
     /// The tool, its arguments, and the folder to run it in.
     Native(&'static str, &'static [&'static str], Option<PathBuf>),
     Direct(&'static ProjectArtifactKind),
+    /// Delete what the tool's docs allow of a tool cache.
+    DeleteCache(Deletable),
 }
 
 #[derive(Debug, Serialize)]
@@ -65,8 +67,8 @@ pub struct Plan {
 }
 
 impl Plan {
-    /// Whether anything here is cleaned through a tool, the only thing the
-    /// cleanup level changes.
+    /// Whether anything here is a tool cache, the only thing the cleanup level
+    /// changes.
     pub fn uses_level(&self) -> bool {
         self.plan
             .iter()
@@ -175,7 +177,7 @@ pub fn plan(env: &Env, scan: &Scan, selection: &Selection, level: Level) -> Resu
         let named = if names.is_empty() {
             match selection.older_than_days {
                 Some(_) => r.kind == Kind::ProjectArtifact,
-                None => r.kind == Kind::ToolCache,
+                None => r.kind == Kind::ToolCache && r.size_bytes > 0,
             }
         } else {
             names
@@ -250,28 +252,56 @@ fn entry(env: &Env, r: &Reclaimable, level: Level) -> PlanEntry {
         Level::Unused => cleanup.unused,
         Level::Full => cleanup.full,
     };
+    let tool = std::iter::once(cleanup.tool)
+        .chain(cleanup.also_named.iter().copied())
+        .find(|name| env.find_tool(name).is_some());
+    let no_command = args.is_none() || tool.is_none();
+    if let (true, Level::Full, Some(deletable)) = (no_command, level, cleanup.deletable) {
+        if let Err(reason) = what_to_delete(env, &r.path, deletable) {
+            return PlanEntry {
+                path: Some(r.path.clone()),
+                ..not_cleanable(kind.id, kind.name, reason)
+            };
+        }
+        return PlanEntry {
+            id: kind.id.to_string(),
+            name: kind.name.to_string(),
+            cleanable: true,
+            action: Some("delete permanently".to_string()),
+            expected_bytes: Some(r.size_bytes),
+            complete: r.complete,
+            reason: None,
+            method: Some(Method::DeleteCache(deletable)),
+            path: Some(r.path.clone()),
+            last_modified_ms: None,
+        };
+    }
     let Some(args) = args else {
         let reason = match level {
             Level::Unused => format!(
                 "{} offers no cleanup of only unused data here; use --full to remove all of it",
                 cleanup.tool
             ),
-            Level::Full => format!(
-                "{} offers no full cleanup here, only removing what nothing uses",
-                cleanup.tool
-            ),
+            Level::Full => format!("{} offers no full cleanup here", cleanup.tool),
         };
         return not_cleanable(kind.id, kind.name, reason);
     };
-    if env.find_tool(cleanup.tool).is_none() {
-        return not_cleanable(
-            kind.id,
-            kind.name,
-            format!("{} is not on PATH", cleanup.tool),
-        );
-    }
+    let Some(tool) = tool else {
+        let reason = if cleanup.deletable.is_some() {
+            format!(
+                "{} is not on PATH to remove only unused data; use --full to delete all of it",
+                cleanup.tool
+            )
+        } else {
+            format!(
+                "{} is not on PATH, and its docs do not allow deleting this directly",
+                cleanup.tool
+            )
+        };
+        return not_cleanable(kind.id, kind.name, reason);
+    };
     if let Some(below) = cleanup.below_version {
-        let version = env.tool_value(cleanup.tool, &["--version"]);
+        let version = env.tool_value(tool, &["--version"]);
         if version
             .as_deref()
             .is_none_or(|v| version_at_least(v, below))
@@ -284,7 +314,7 @@ fn entry(env: &Env, r: &Reclaimable, level: Level) -> PlanEntry {
         }
     }
     if let Some(min) = cleanup.min_version {
-        let version = env.tool_value(cleanup.tool, &["--version"]);
+        let version = env.tool_value(tool, &["--version"]);
         match version.as_deref().map(|v| version_at_least(v, min)) {
             Some(true) => {}
             Some(false) => {
@@ -312,11 +342,11 @@ fn entry(env: &Env, r: &Reclaimable, level: Level) -> PlanEntry {
         id: kind.id.to_string(),
         name: kind.name.to_string(),
         cleanable: true,
-        action: Some(format!("{} {}", cleanup.tool, args.join(" "))),
+        action: Some(format!("{tool} {}", args.join(" "))),
         expected_bytes,
         complete: r.complete,
         reason: None,
-        method: Some(Method::Native(cleanup.tool, args, r.run_from.clone())),
+        method: Some(Method::Native(tool, args, r.run_from.clone())),
         path: Some(r.path.clone()),
         last_modified_ms: None,
     }
@@ -374,11 +404,17 @@ pub fn execute(env: &Env, plan: Plan, before: &Scan, scope: &Scope) -> (Outcome,
         .plan
         .into_iter()
         .map(|entry| {
+            if let (Some(_), Some(action)) = (&entry.method, &entry.action) {
+                eprintln!("{}: {action}", entry.name);
+            }
             let run = entry.method.as_ref().map(|method| match method {
                 Method::Native(tool, args, dir) => {
                     env.run_to_completion(tool, args, dir.as_deref())
                 }
                 Method::Direct(kind) => delete_artifact(entry.path.as_deref(), kind),
+                Method::DeleteCache(deletable) => {
+                    delete_cache(env, entry.path.as_deref(), deletable)
+                }
             });
             (entry, run)
         })
@@ -487,6 +523,78 @@ fn tracked_by_git(env: &Env, path: &Path) -> Result<(), String> {
         ToolAnswer::Printed(_) => Err("git tracks files in this folder".into()),
     }
 }
+
+/// Permanently deletes what `deletable` allows of the tool cache at `path`.
+fn delete_cache(env: &Env, path: Option<&Path>, deletable: &Deletable) -> Result<(), String> {
+    let path = path.ok_or("no path to delete")?;
+    for folder in what_to_delete(env, path, *deletable)? {
+        std::fs::remove_dir_all(folder).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// The folders to delete of the tool cache at `path`, once it has been checked
+/// to be one. `Err` says why it will not be touched.
+fn what_to_delete(env: &Env, path: &Path, deletable: Deletable) -> Result<Vec<PathBuf>, String> {
+    let shown = path.display();
+    let meta = std::fs::symlink_metadata(path).map_err(|e| e.to_string())?;
+    if !meta.is_dir() {
+        return Err(format!("{shown} is not a folder"));
+    }
+    if env.holds_home(path) {
+        return Err(format!("{shown} holds the home folder"));
+    }
+    let entries: Vec<std::fs::DirEntry> = std::fs::read_dir(path)
+        .map_err(|e| e.to_string())?
+        .collect::<Result<_, _>>()
+        .map_err(|e| e.to_string())?;
+    let folders = match deletable {
+        Deletable::FolderHolding(expected) => {
+            let stray = entries.iter().find(|entry| {
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                !expected.contains(&name.as_ref()) && !IGNORED_ENTRIES.contains(&name.as_ref())
+            });
+            if let Some(stray) = stray {
+                return Err(format!(
+                    "{shown} does not look like this cache: it holds {}",
+                    stray.file_name().to_string_lossy()
+                ));
+            }
+            vec![path.to_path_buf()]
+        }
+        Deletable::VersionedStores => {
+            let stores: Vec<PathBuf> = entries
+                .iter()
+                .filter(|entry| {
+                    let name = entry.file_name();
+                    let versioned = name
+                        .to_string_lossy()
+                        .strip_prefix('v')
+                        .is_some_and(|n| n.parse::<u32>().is_ok());
+                    versioned && entry.path().join("files").is_dir()
+                })
+                .map(|entry| entry.path())
+                .collect();
+            if stores.is_empty() {
+                return Err(format!(
+                    "{shown} does not look like this cache: no store in it"
+                ));
+            }
+            stores
+        }
+    };
+    if let Some(mounted) = folders.iter().find(|f| discover::holds_another_disk(f)) {
+        return Err(format!(
+            "another disk is mounted inside {}",
+            mounted.display()
+        ));
+    }
+    Ok(folders)
+}
+
+/// Files an operating system leaves in any folder it has shown.
+const IGNORED_ENTRIES: [&str; 2] = [".DS_Store", "Thumbs.db"];
 
 /// Permanently deletes a project artifact, once more checking that it is one.
 /// Links inside it are removed, not followed.

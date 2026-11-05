@@ -208,3 +208,49 @@ pub fn reclaimable<'a>(scan: &'a serde_json::Value, id: &str) -> Option<&'a serd
         .iter()
         .find(|r| r["id"] == id)
 }
+
+/// What a fake tool does for one command line.
+pub struct Reply {
+    pub unix: String,
+    pub windows: String,
+}
+
+pub fn prints(path: &Path) -> Reply {
+    Reply {
+        unix: format!("echo '{}'", path.display()),
+        windows: format!("echo {}", path.display()),
+    }
+}
+
+pub fn says(text: &str) -> Reply {
+    Reply {
+        unix: format!("echo {text}"),
+        windows: format!("echo {text}"),
+    }
+}
+
+pub fn removes(path: &Path) -> Reply {
+    let batch = path.display().to_string().replace('/', "\\");
+    Reply {
+        unix: format!("rm -rf '{}'", path.display()),
+        windows: format!(
+            "if exist \"{batch}\\\" (rmdir /s /q \"{batch}\") else (del /q \"{batch}\")"
+        ),
+    }
+}
+
+/// A fake tool answering exactly these command lines, and nothing otherwise.
+pub fn tool(sb: &Sandbox, name: &str, replies: Vec<(&str, Reply)>) {
+    let mut unix = String::from("case \"$*\" in\n");
+    let mut windows = String::from("set \"ARGS=%*\"\r\n");
+    let mut labels = String::new();
+    for (i, (args, reply)) in replies.iter().enumerate() {
+        unix.push_str(&format!("  '{args}') {} ;;\n", reply.unix));
+        windows.push_str(&format!("if \"%ARGS%\"==\"{args}\" goto c{i}\r\n"));
+        labels.push_str(&format!(":c{i}\r\n{}\r\nexit /b 0\r\n", reply.windows));
+    }
+    unix.push_str("esac");
+    windows.push_str("exit /b 0\r\n");
+    windows.push_str(&labels);
+    sb.fake_tool(name, &unix, &windows);
+}

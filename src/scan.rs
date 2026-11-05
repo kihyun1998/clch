@@ -188,7 +188,7 @@ pub fn run(env: &Env, scope: &Scope) -> Scan {
     let mut not_projects = env.application_folders();
     for kind in catalog::tool_caches() {
         for located in (kind.locate)(env, &scope.roots) {
-            if located.path.is_dir() {
+            if located.path.is_absolute() && located.path.is_dir() {
                 not_projects.push(located.path.clone());
                 add(
                     Kind::ToolCache,

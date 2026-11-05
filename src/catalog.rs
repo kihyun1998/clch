@@ -68,6 +68,12 @@ impl Located {
 /// the tool offers no command for that level.
 pub struct NativeCleanup {
     pub tool: &'static str,
+    /// Other names the same tool goes by, tried in order after `tool`.
+    pub also_named: &'static [&'static str],
+    /// What may be deleted when the tool's official docs allow it, so that a
+    /// full cleanup can do that where no command does it. `None` where they do
+    /// not.
+    pub deletable: Option<Deletable>,
     pub unused: Option<&'static [&'static str]>,
     pub full: Option<&'static [&'static str]>,
     /// The oldest tool version that has these commands, as `tool --version`
@@ -75,6 +81,15 @@ pub struct NativeCleanup {
     pub min_version: Option<&'static str>,
     /// The first tool version that no longer has them.
     pub below_version: Option<&'static str>,
+}
+
+/// How to tell that a folder is the cache clch thinks it is, and what to delete.
+#[derive(Debug, Clone, Copy)]
+pub enum Deletable {
+    /// A folder holding only these entries, deleted whole.
+    FolderHolding(&'static [&'static str]),
+    /// Each `v<number>` folder inside that has a `files` folder.
+    VersionedStores,
 }
 
 pub fn tool_caches() -> &'static [ToolCacheKind] {
@@ -86,6 +101,8 @@ pub fn tool_caches() -> &'static [ToolCacheKind] {
             one_per_disk: false,
             cleanup: NativeCleanup {
                 tool: "npm",
+                also_named: &[],
+                deletable: None,
                 unused: Some(&["cache", "verify"]),
                 full: Some(&["cache", "clean", "--force"]),
                 min_version: None,
@@ -99,6 +116,8 @@ pub fn tool_caches() -> &'static [ToolCacheKind] {
             one_per_disk: false,
             cleanup: NativeCleanup {
                 tool: "npm",
+                also_named: &[],
+                deletable: None,
                 unused: None,
                 full: Some(&["cache", "npx", "rm", "--force"]),
                 min_version: Some("11.2.0"),
@@ -112,6 +131,8 @@ pub fn tool_caches() -> &'static [ToolCacheKind] {
             one_per_disk: true,
             cleanup: NativeCleanup {
                 tool: "pnpm",
+                also_named: &[],
+                deletable: Some(Deletable::VersionedStores),
                 unused: Some(&["store", "prune"]),
                 full: None,
                 min_version: None,
@@ -125,6 +146,8 @@ pub fn tool_caches() -> &'static [ToolCacheKind] {
             one_per_disk: false,
             cleanup: NativeCleanup {
                 tool: "yarn",
+                also_named: &[],
+                deletable: None,
                 unused: None,
                 full: Some(&["cache", "clean"]),
                 min_version: None,
@@ -138,9 +161,110 @@ pub fn tool_caches() -> &'static [ToolCacheKind] {
             one_per_disk: false,
             cleanup: NativeCleanup {
                 tool: "yarn",
+                also_named: &[],
+                deletable: None,
                 unused: None,
                 full: Some(&["cache", "clean", "--all"]),
                 min_version: Some("2.0.0"),
+                below_version: None,
+            },
+        },
+        ToolCacheKind {
+            id: "pip-cache",
+            name: "pip cache",
+            locate: python::pip,
+            one_per_disk: false,
+            cleanup: NativeCleanup {
+                tool: "pip",
+                also_named: &["pip3"],
+                deletable: None,
+                unused: None,
+                full: Some(&["cache", "purge"]),
+                min_version: None,
+                below_version: None,
+            },
+        },
+        ToolCacheKind {
+            id: "uv-cache",
+            name: "uv cache",
+            locate: python::uv,
+            one_per_disk: false,
+            cleanup: NativeCleanup {
+                tool: "uv",
+                also_named: &[],
+                deletable: None,
+                unused: Some(&["cache", "prune"]),
+                full: Some(&["cache", "clean"]),
+                min_version: None,
+                below_version: None,
+            },
+        },
+        ToolCacheKind {
+            id: "cargo-registry",
+            name: "Cargo registry cache",
+            locate: cargo::registry,
+            one_per_disk: false,
+            cleanup: NativeCleanup {
+                tool: "cargo",
+                also_named: &[],
+                deletable: Some(Deletable::FolderHolding(&[
+                    "cache",
+                    "src",
+                    "index",
+                    "CACHEDIR.TAG",
+                ])),
+                unused: None,
+                full: None,
+                min_version: None,
+                below_version: None,
+            },
+        },
+        ToolCacheKind {
+            id: "cargo-git",
+            name: "Cargo git cache",
+            locate: cargo::git,
+            one_per_disk: false,
+            cleanup: NativeCleanup {
+                tool: "cargo",
+                also_named: &[],
+                deletable: Some(Deletable::FolderHolding(&[
+                    "db",
+                    "checkouts",
+                    "CACHEDIR.TAG",
+                ])),
+                unused: None,
+                full: None,
+                min_version: None,
+                below_version: None,
+            },
+        },
+        ToolCacheKind {
+            id: "go-build-cache",
+            name: "Go build cache",
+            locate: go::build,
+            one_per_disk: false,
+            cleanup: NativeCleanup {
+                tool: "go",
+                also_named: &[],
+                deletable: None,
+                unused: None,
+                full: Some(&["clean", "-cache"]),
+                min_version: None,
+                below_version: None,
+            },
+        },
+        ToolCacheKind {
+            id: "go-module-cache",
+            name: "Go module cache",
+            locate: go::modules,
+            one_per_disk: false,
+            cleanup: NativeCleanup {
+                tool: "go",
+                also_named: &[],
+                deletable: None,
+                unused: None,
+                full: Some(&["clean", "-modcache"]),
+                min_version: None,
                 below_version: None,
             },
         },
@@ -276,6 +400,108 @@ mod pnpm {
         } else {
             home.join("Library").join("pnpm").join("store")
         })
+    }
+}
+
+/// What `tool args` reports, from the home folder.
+fn reported(env: &Env, tool: &str, args: &[&str]) -> Option<PathBuf> {
+    env.tool_path(tool, args, env.home().map(PathBuf::as_path))
+}
+
+/// `%LOCALAPPDATA%`, or its default under the home folder.
+fn local_app_data(env: &Env) -> Option<PathBuf> {
+    env.local_app_data()
+        .cloned()
+        .or_else(|| env.home().map(|h| h.join("AppData").join("Local")))
+}
+
+fn one(path: Option<PathBuf>) -> Vec<Located> {
+    path.map(Located::at).into_iter().collect()
+}
+
+mod python {
+    use super::*;
+
+    pub fn pip(env: &Env, _roots: &[PathBuf]) -> Vec<Located> {
+        let pip = ["pip", "pip3"]
+            .into_iter()
+            .find(|t| env.find_tool(t).is_some());
+        one(pip
+            .and_then(|pip| reported(env, pip, &["cache", "dir"]))
+            .or_else(|| {
+                if let Some(dir) = env.var("PIP_CACHE_DIR") {
+                    return Some(PathBuf::from(dir));
+                }
+                if cfg!(windows) {
+                    return Some(local_app_data(env)?.join("pip").join("Cache"));
+                }
+                if let Some(cache) = env.var("XDG_CACHE_HOME") {
+                    return Some(PathBuf::from(cache).join("pip"));
+                }
+                Some(env.home()?.join("Library").join("Caches").join("pip"))
+            }))
+    }
+
+    pub fn uv(env: &Env, _roots: &[PathBuf]) -> Vec<Located> {
+        one(reported(env, "uv", &["cache", "dir"]).or_else(|| {
+            if let Some(dir) = env.var("UV_CACHE_DIR") {
+                return Some(PathBuf::from(dir));
+            }
+            if cfg!(windows) {
+                return Some(local_app_data(env)?.join("uv").join("cache"));
+            }
+            if let Some(cache) = env.var("XDG_CACHE_HOME") {
+                return Some(PathBuf::from(cache).join("uv"));
+            }
+            Some(env.home()?.join(".cache").join("uv"))
+        }))
+    }
+}
+
+mod cargo {
+    use super::*;
+
+    fn home(env: &Env) -> Option<PathBuf> {
+        env.var("CARGO_HOME")
+            .map(PathBuf::from)
+            .or_else(|| Some(env.home()?.join(".cargo")))
+    }
+
+    pub fn registry(env: &Env, _roots: &[PathBuf]) -> Vec<Located> {
+        one(home(env).map(|h| h.join("registry")))
+    }
+
+    pub fn git(env: &Env, _roots: &[PathBuf]) -> Vec<Located> {
+        one(home(env).map(|h| h.join("git")))
+    }
+}
+
+mod go {
+    use super::*;
+
+    pub fn build(env: &Env, _roots: &[PathBuf]) -> Vec<Located> {
+        one(reported(env, "go", &["env", "GOCACHE"]).or_else(|| {
+            if let Some(dir) = env.var("GOCACHE") {
+                return Some(PathBuf::from(dir));
+            }
+            if cfg!(windows) {
+                return Some(local_app_data(env)?.join("go-build"));
+            }
+            Some(env.home()?.join("Library").join("Caches").join("go-build"))
+        }))
+    }
+
+    pub fn modules(env: &Env, _roots: &[PathBuf]) -> Vec<Located> {
+        one(reported(env, "go", &["env", "GOMODCACHE"]).or_else(|| {
+            if let Some(dir) = env.var("GOMODCACHE") {
+                return Some(PathBuf::from(dir));
+            }
+            let gopath = env
+                .var("GOPATH")
+                .and_then(|list| std::env::split_paths(&list).next())
+                .or_else(|| Some(env.home()?.join("go")))?;
+            Some(gopath.join("pkg").join("mod"))
+        }))
     }
 }
 

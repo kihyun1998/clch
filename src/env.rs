@@ -122,6 +122,14 @@ impl Env {
         std::env::var_os(name).filter(|v| !v.is_empty())
     }
 
+    /// Whether `path` is the home folder or holds it.
+    pub fn holds_home(&self, path: &Path) -> bool {
+        let real = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+        self.home
+            .as_deref()
+            .is_some_and(|home| real(home).starts_with(real(path)))
+    }
+
     /// The single line `tool args` prints, run from the home folder.
     pub fn tool_value(&self, tool: &str, args: &[&str]) -> Option<String> {
         self.tool_value_from(tool, args, self.home.as_deref())
@@ -170,7 +178,10 @@ impl Env {
             .find_tool(tool)
             .ok_or_else(|| format!("{tool} is not on PATH"))?;
         let mut command = self.command(program, args);
-        command.stdout(Stdio::piped()).stderr(Stdio::piped());
+        command
+            .envs(settings_for(tool).iter().copied())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
         if let Some(dir) = dir.filter(|d| d.is_dir()) {
             command.current_dir(dir);
         }
@@ -182,7 +193,12 @@ impl Env {
         }
         let mut printed = String::from_utf8_lossy(&output.stdout).into_owned();
         printed.push_str(&String::from_utf8_lossy(&output.stderr));
-        Err(printed.trim().to_string())
+        let printed = printed.trim();
+        Err(if printed.is_empty() {
+            format!("{tool} printed nothing and {}", output.status)
+        } else {
+            printed.to_string()
+        })
     }
 
     fn command(&self, program: PathBuf, args: &[&str]) -> Command {
@@ -202,6 +218,7 @@ impl Env {
         let mut command = Command::new(program);
         command
             .args(args)
+            .envs(settings_for(tool).iter().copied())
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
@@ -242,6 +259,15 @@ impl Env {
                 ToolAnswer::TimedOut
             }
         }
+    }
+}
+
+/// Environment variables a tool runs with, so that asking it where its cache is
+/// does not make it download anything.
+fn settings_for(tool: &str) -> &'static [(&'static str, &'static str)] {
+    match tool {
+        "go" => &[("GOTOOLCHAIN", "local")],
+        _ => &[],
     }
 }
 
