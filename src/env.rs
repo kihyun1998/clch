@@ -350,6 +350,7 @@ impl Env {
 fn settings_for(tool: &str) -> &'static [(&'static str, &'static str)] {
     match tool {
         "go" => &[("GOTOOLCHAIN", "local")],
+        "npm" | "pnpm" | "yarn" => &[("COREPACK_ENABLE_NETWORK", "0")],
         _ => &[],
     }
 }

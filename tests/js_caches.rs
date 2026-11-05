@@ -608,3 +608,43 @@ fn berry_answering_undefined_falls_back_to_its_default() {
         berry_default(&sb)
     );
 }
+
+// corepack
+
+fn fake_recording_network_setting(sb: &Sandbox, tool: &str) -> PathBuf {
+    let seen = sb.root().join(format!("{tool}-saw"));
+    sb.fake_tool(
+        tool,
+        &format!("echo \"$COREPACK_ENABLE_NETWORK\" >> '{0}'", seen.display()),
+        &format!("echo %COREPACK_ENABLE_NETWORK%>>\"{0}\"", seen.display()),
+    );
+    seen
+}
+
+#[test]
+fn a_scan_tells_corepack_shims_not_to_use_the_network() {
+    let sb = Sandbox::new();
+    for tool in ["pnpm", "yarn", "npm"] {
+        let seen = fake_recording_network_setting(&sb, tool);
+        sb.json(&["scan"]);
+        let told = std::fs::read_to_string(&seen).unwrap();
+        assert!(!told.trim().is_empty(), "{tool} was never asked");
+        assert!(told.lines().all(|l| l.trim() == "0"), "{tool}: {told}");
+    }
+}
+
+#[test]
+fn a_shim_that_cannot_answer_leaves_a_clean_scan() {
+    let sb = Sandbox::new();
+    sb.fake_tool(
+        "pnpm",
+        "echo \"Network access disabled by the environment\" >&2; exit 1",
+        "echo Network access disabled by the environment 1>&2\r\nexit /b 1",
+    );
+
+    let out = sb.clch().args(["scan", "--json"]).output().unwrap();
+
+    assert!(out.status.success());
+    let scan: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(scan["reclaimables"].is_array());
+}

@@ -89,6 +89,7 @@ Classic and Berry are separate reclaimables, because a cache left by the one not
 
 ## How tools are run
 
+- **`COREPACK_ENABLE_NETWORK=0` is set on npm, pnpm and yarn.** A scan through a corepack shim downloaded 11 MB in a completeness read. Corepack's README gives that variable, and with it a shim pinned to a version not on the machine printed "Network access disabled by the environment", exited 1 and downloaded nothing (corepack 0.34.2). It also applies to their cleanups: a tool not on the machine cannot clean anything worth downloading it for.
 - **From the home folder, never from a project**, whose folder can hold settings and code a tool acts on; the home folder and a `.pnpm-store` are the only places tools run. npm reads the `.npmrc` of the folder it runs in, so a project could otherwise redirect the cache npm reports or cleans.
 - **Questions time out; cleanups do not.** A question such as `npm config get cache` is abandoned after 10 seconds, its whole process tree ended. A cleanup may legitimately run for a long time on a large cache, so it runs to completion; it shares clch's process group, so a Ctrl+C in the terminal stops the tool as well as clch. Each one's command is printed to stderr as it starts, since a tool can wait silently: `uv cache clean` waits for whichever `uv run` holds its lock (measured 19 and 21 seconds behind a 25-second run).
 - **git is asked with `core.fsmonitor` off.** `git ls-files` in a repository with `core.fsmonitor` in its `.git/config` runs that command (measured), and a downloaded archive can carry such a `.git`.
