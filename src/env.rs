@@ -11,7 +11,8 @@ use std::time::{Duration, Instant};
 
 use crate::process::ToolProcess;
 
-/// How long a tool may take to answer before clch gives up on it.
+/// How long a tool may take to answer before clch gives up on it, unless
+/// `CLCH_TOOL_TIMEOUT_SECS` says otherwise.
 const TOOL_TIMEOUT: Duration = Duration::from_secs(10);
 
 type ToolCall = (String, Vec<String>, Option<PathBuf>);
@@ -26,6 +27,7 @@ pub struct Env {
     answers: RefCell<HashMap<ToolCall, Option<String>>>,
     reports: RefCell<HashMap<ToolCall, ToolAnswer>>,
     progress: RefCell<Option<Progress>>,
+    tool_timeout: Duration,
 }
 
 /// Where word of a long run goes.
@@ -60,6 +62,10 @@ impl Env {
             answers: RefCell::new(HashMap::new()),
             reports: RefCell::new(HashMap::new()),
             progress: RefCell::new(None),
+            tool_timeout: std::env::var("CLCH_TOOL_TIMEOUT_SECS")
+                .ok()
+                .and_then(|secs| secs.parse().ok())
+                .map_or(TOOL_TIMEOUT, Duration::from_secs),
         }
     }
 
@@ -320,7 +326,7 @@ impl Env {
             }
             let _ = printed.send(out);
         });
-        let deadline = Instant::now() + TOOL_TIMEOUT;
+        let deadline = Instant::now() + self.tool_timeout;
         let status = loop {
             match process.child().try_wait() {
                 Ok(Some(status)) => break status,

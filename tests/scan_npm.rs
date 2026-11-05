@@ -219,6 +219,7 @@ fn npm_output_that_is_not_one_line_falls_back_to_the_default_location() {
 fn a_hung_npm_is_abandoned_and_the_default_location_used() {
     let sb = Sandbox::new();
     sb.write_file(&sb.default_npm_cache().join("_cacache/a"), 55);
+    sb.limit_tools_to(1);
     sb.fake_tool("npm", "sleep 60", "ping -n 60 127.0.0.1 >nul");
 
     let started = std::time::Instant::now();
@@ -277,6 +278,7 @@ fn a_cache_folder_that_is_a_symlink_is_sized_by_what_it_points_to() {
 fn an_abandoned_tool_leaves_no_process_behind() {
     let sb = Sandbox::new();
     let pid_file = sb.root().join("child.pid");
+    sb.limit_tools_to(5);
     sb.fake_tool(
         "npm",
         &format!("sleep 60 & echo $! > '{}'; wait", pid_file.display()),
@@ -292,4 +294,28 @@ fn an_abandoned_tool_leaves_no_process_behind() {
         .expect("run kill -0")
         .success();
     assert!(!alive, "the tool's child {pid} is still running");
+}
+
+#[test]
+fn the_limit_on_a_tools_answer_can_be_set() {
+    let sb = Sandbox::new();
+    let custom = sb.root().join("custom");
+    sb.write_file(&custom.join("_cacache/entry"), 2);
+    sb.fake_tool(
+        "npm",
+        &format!("sleep 2; echo '{}'", custom.display()),
+        &format!("ping -n 3 127.0.0.1 >nul\r\necho {}", custom.display()),
+    );
+    let reported = custom.join("_cacache").display().to_string();
+
+    sb.limit_tools_to(1);
+    let short = sb.json(&["scan"]);
+    assert!(
+        !short.to_string().contains(&reported),
+        "waited past the limit: {short}"
+    );
+
+    sb.limit_tools_to(60);
+    let long = sb.json(&["scan"]);
+    assert_eq!(reclaimable(&long, "npm-cache").unwrap()["path"], reported);
 }

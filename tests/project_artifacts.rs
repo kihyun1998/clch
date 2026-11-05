@@ -778,6 +778,7 @@ fn a_git_that_will_not_answer_protects_the_folder() {
     let sb = Sandbox::new();
     let dir = roots(&sb);
     let modules = sb.node_project(&dir.join("app"), 1);
+    sb.limit_tools_to(1);
     sb.fake_tool("git", "sleep 60", "ping -n 60 127.0.0.1 >nul");
 
     let result = sb.json(&["clean", "node_modules", "--yes"]);

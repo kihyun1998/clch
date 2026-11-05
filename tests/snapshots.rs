@@ -170,6 +170,7 @@ fn run_together(sb: &Sandbox, count: usize) {
                 .env("USERPROFILE", sb.home())
                 .env("LOCALAPPDATA", sb.local_app_data())
                 .env("APPDATA", sb.app_data())
+                .env("CLCH_TOOL_TIMEOUT_SECS", "120")
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::piped());
             for keep in [

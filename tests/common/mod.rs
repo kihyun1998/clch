@@ -21,12 +21,16 @@ pub fn blocks(count: i64) -> i64 {
 
 pub struct Sandbox {
     root: TempDir,
+    tool_limit_secs: std::sync::atomic::AtomicU32,
 }
 
 impl Sandbox {
     pub fn new() -> Self {
         let root = tempfile::tempdir().expect("create sandbox");
-        let sandbox = Sandbox { root };
+        let sandbox = Sandbox {
+            root,
+            tool_limit_secs: std::sync::atomic::AtomicU32::new(120),
+        };
         for dir in [
             sandbox.home(),
             sandbox.local_app_data(),
@@ -36,6 +40,13 @@ impl Sandbox {
             fs::create_dir_all(dir).expect("create sandbox dir");
         }
         sandbox
+    }
+
+    /// How long clch waits for a tool's answer from now on. A fake tool's first
+    /// run can take seconds, so the limit is long unless a test is about it.
+    pub fn limit_tools_to(&self, seconds: u32) {
+        self.tool_limit_secs
+            .store(seconds, std::sync::atomic::Ordering::Relaxed);
     }
 
     pub fn root(&self) -> &Path {
@@ -171,6 +182,12 @@ impl Sandbox {
             .env("USERPROFILE", self.home())
             .env("LOCALAPPDATA", self.local_app_data())
             .env("APPDATA", self.app_data())
+            .env(
+                "CLCH_TOOL_TIMEOUT_SECS",
+                self.tool_limit_secs
+                    .load(std::sync::atomic::Ordering::Relaxed)
+                    .to_string(),
+            )
             .current_dir(self.root());
         for keep in [
             "SystemRoot",
