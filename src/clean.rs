@@ -1,12 +1,14 @@
 //! Cleaning: a plan built from a scan, and carrying it out.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
+use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
-use crate::catalog::{self, ToolCacheKind};
-use crate::env::Env;
-use crate::scan::{self, Reclaimable, Scan};
+use crate::catalog::{self, Kind, ProjectArtifactKind, ToolCacheKind};
+use crate::discover;
+use crate::env::{Env, ToolAnswer};
+use crate::scan::{self, Reclaimable, Scan, Scope};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -33,16 +35,42 @@ pub struct PlanEntry {
     pub complete: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<PathBuf>,
+    /// When this project artifact's project last changed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_modified_ms: Option<i64>,
     #[serde(skip)]
-    command: Option<(&'static str, &'static [&'static str])>,
-    #[serde(skip)]
-    path: Option<std::path::PathBuf>,
+    method: Option<Method>,
+}
+
+/// How a plan entry is carried out.
+#[derive(Debug, Clone, Copy)]
+enum Method {
+    Native(&'static str, &'static [&'static str]),
+    Direct(&'static ProjectArtifactKind),
 }
 
 #[derive(Debug, Serialize)]
 pub struct Plan {
     pub level: Level,
     pub plan: Vec<PlanEntry>,
+    /// Project artifacts left out because nothing selected them.
+    pub not_selected: usize,
+    /// The most this plan can free, adding up what can be known beforehand.
+    pub expected_total_bytes: u64,
+    /// True when no scan roots are set, so no project artifact was looked for.
+    pub project_artifacts_skipped: bool,
+}
+
+impl Plan {
+    /// Whether anything here is cleaned through a tool, the only thing the
+    /// cleanup level changes.
+    pub fn uses_level(&self) -> bool {
+        self.plan
+            .iter()
+            .any(|e| !matches!(e.method, Some(Method::Direct(_))))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -59,6 +87,8 @@ pub enum Status {
 pub struct CleanResult {
     pub id: String,
     pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<PathBuf>,
     pub status: Status,
     /// How much this reclaimable shrank. A file another reclaimable also holds
     /// counts here though it stays on disk; `DiskFreed` and `Outcome` do not
@@ -76,7 +106,12 @@ pub struct CleanResult {
 
 #[derive(Debug, Serialize)]
 pub struct Outcome {
+    /// What a cleanup was attempted on, by id and path.
+    #[serde(skip)]
+    pub attempted: Vec<(String, PathBuf)>,
     pub level: Level,
+    /// Project artifacts left out because nothing selected them.
+    pub not_selected: usize,
     pub results: Vec<CleanResult>,
     pub disks: Vec<DiskFreed>,
     pub freed_bytes: u64,
@@ -99,42 +134,115 @@ impl Outcome {
     }
 }
 
-/// An id that names no kind of reclaimable.
+/// A name in a selection that cannot be acted on.
 #[derive(Debug)]
-pub struct UnknownId(pub String);
+pub enum BadName {
+    /// Neither a kind of reclaimable nor the path of one.
+    Unknown(String),
+    /// A kind of project artifact, and also a folder where clch was started.
+    Ambiguous(String),
+}
 
-/// The plan for cleaning `ids` (every reclaimable in `scan` when empty).
-pub fn plan(env: &Env, scan: &Scan, ids: &[String], level: Level) -> Result<Plan, UnknownId> {
-    if let Some(unknown) = ids.iter().find(|id| catalog::tool_cache(id).is_none()) {
-        return Err(UnknownId(unknown.clone()));
+/// What to clean. With no `names`, every tool cache; with `older_than_days` and
+/// no `names`, the project artifacts of that age instead.
+#[derive(Debug, Default)]
+pub struct Selection {
+    /// Kinds of reclaimable by id, and project artifacts by path.
+    pub names: Vec<String>,
+    pub older_than_days: Option<u64>,
+}
+
+/// The plan for cleaning what `selection` picks out of `scan`.
+pub fn plan(env: &Env, scan: &Scan, selection: &Selection, level: Level) -> Result<Plan, BadName> {
+    let mut seen = HashSet::new();
+    let names: Vec<&String> = selection.names.iter().filter(|n| seen.insert(*n)).collect();
+    let is_kind = |name: &str| {
+        catalog::tool_cache(name).is_some() || catalog::project_artifact(name).is_some()
+    };
+    let path_of = |name: &str| env.absolute(Path::new(name));
+    let names_path = |name: &str, path: &Path| same_folder(&path_of(name), path);
+    for name in &names {
+        let is_path = scan.reclaimables.iter().any(|r| names_path(name, &r.path));
+        if !is_kind(name) && !is_path {
+            return Err(BadName::Unknown((*name).clone()));
+        }
+        if catalog::project_artifact(name).is_some() && path_of(name).is_dir() {
+            return Err(BadName::Ambiguous((*name).clone()));
+        }
     }
-    let mut ids = ids.to_vec();
-    let mut seen = std::collections::HashSet::new();
-    ids.retain(|id| seen.insert(id.clone()));
-    let chosen = |r: &&Reclaimable| ids.is_empty() || ids.contains(&r.id);
+    let chosen = |r: &Reclaimable| {
+        let named = if names.is_empty() {
+            match selection.older_than_days {
+                Some(_) => r.kind == Kind::ProjectArtifact,
+                None => r.kind == Kind::ToolCache,
+            }
+        } else {
+            names
+                .iter()
+                .any(|n| n.as_str() == r.id || names_path(n, &r.path))
+        };
+        named
+            && selection
+                .older_than_days
+                .is_none_or(|days| scan.passes_age(r, days))
+    };
     let mut entries: Vec<PlanEntry> = scan
         .reclaimables
         .iter()
-        .filter(chosen)
+        .filter(|r| chosen(r))
         .map(|r| entry(env, r, level))
         .collect();
-    for id in &ids {
-        if !scan.reclaimables.iter().any(|r| &r.id == id) {
-            let kind = catalog::tool_cache(id).expect("checked above");
-            entries.push(not_cleanable(
-                kind.id,
-                kind.name,
-                "not found on this machine".into(),
-            ));
+    let not_selected = scan
+        .reclaimables
+        .iter()
+        .filter(|r| r.kind == Kind::ProjectArtifact && !chosen(r))
+        .count();
+    for name in names.iter().filter(|n| is_kind(n)) {
+        if !scan.reclaimables.iter().any(|r| &r.id == *name) {
+            let kind_name = catalog::tool_cache(name)
+                .map(|k| k.name)
+                .or(catalog::project_artifact(name).map(|k| k.name))
+                .unwrap_or(name.as_str());
+            let reason =
+                if catalog::project_artifact(name).is_some() && scan.project_artifacts_skipped {
+                    "no scan roots are set; add one with `clch roots add <folder>`"
+                } else {
+                    "not found on this machine"
+                };
+            entries.push(not_cleanable(name, kind_name, reason.into()));
         }
     }
     Ok(Plan {
         level,
+        expected_total_bytes: entries.iter().filter_map(|e| e.expected_bytes).sum(),
         plan: entries,
+        not_selected,
+        project_artifacts_skipped: scan.project_artifacts_skipped,
     })
 }
 
 fn entry(env: &Env, r: &Reclaimable, level: Level) -> PlanEntry {
+    if let Some(kind) = catalog::project_artifact(&r.id) {
+        return match tracked_by_git(env, &r.path) {
+            Ok(()) => PlanEntry {
+                id: r.id.clone(),
+                name: r.name.clone(),
+                cleanable: true,
+                action: Some("delete permanently".to_string()),
+                expected_bytes: Some(r.size_bytes),
+                complete: r.complete,
+                reason: None,
+                path: Some(r.path.clone()),
+                last_modified_ms: r.last_modified_ms,
+                method: Some(Method::Direct(kind)),
+            },
+            Err(reason) => PlanEntry {
+                path: Some(r.path.clone()),
+                last_modified_ms: r.last_modified_ms,
+                ..not_cleanable(&r.id, &r.name, reason)
+            },
+        };
+    }
     let kind: &ToolCacheKind = catalog::tool_cache(&r.id).expect("scan ids come from the catalog");
     let cleanup = &kind.cleanup;
     let args = match level {
@@ -191,8 +299,9 @@ fn entry(env: &Env, r: &Reclaimable, level: Level) -> PlanEntry {
         expected_bytes,
         complete: r.complete,
         reason: None,
-        command: Some((cleanup.tool, args)),
+        method: Some(Method::Native(cleanup.tool, args)),
         path: Some(r.path.clone()),
+        last_modified_ms: None,
     }
 }
 
@@ -205,8 +314,9 @@ fn not_cleanable(id: &str, name: &str, reason: String) -> PlanEntry {
         expected_bytes: None,
         complete: true,
         reason: Some(reason),
-        command: None,
+        method: None,
         path: None,
+        last_modified_ms: None,
     }
 }
 
@@ -242,18 +352,19 @@ fn version_at_least(have: &str, min: &str) -> bool {
 /// Carries out every cleanable entry of `plan`, each independently, and
 /// measures the result against `before`, the scan the plan was built from. The
 /// scan taken afterwards is returned as well.
-pub fn execute(env: &Env, plan: Plan, before: &Scan) -> (Outcome, Scan) {
+pub fn execute(env: &Env, plan: Plan, before: &Scan, scope: &Scope) -> (Outcome, Scan) {
     let attempted: Vec<_> = plan
         .plan
         .into_iter()
         .map(|entry| {
-            let run = entry
-                .command
-                .map(|(tool, args)| env.run_to_completion(tool, args));
+            let run = entry.method.map(|method| match method {
+                Method::Native(tool, args) => env.run_to_completion(tool, args),
+                Method::Direct(kind) => delete_artifact(entry.path.as_deref(), kind),
+            });
             (entry, run)
         })
         .collect();
-    let after = scan::run(env);
+    let after = scan::run(env, scope);
 
     let cleaned_disks: BTreeSet<&str> = attempted
         .iter()
@@ -276,6 +387,11 @@ pub fn execute(env: &Env, plan: Plan, before: &Scan) -> (Outcome, Scan) {
         })
         .collect();
 
+    let attempted_paths = attempted
+        .iter()
+        .filter(|(_, run)| run.is_some())
+        .filter_map(|(entry, _)| Some((entry.id.clone(), entry.path.clone()?)))
+        .collect();
     let results = attempted
         .into_iter()
         .map(|(entry, run)| {
@@ -296,6 +412,7 @@ pub fn execute(env: &Env, plan: Plan, before: &Scan) -> (Outcome, Scan) {
             CleanResult {
                 id: entry.id,
                 name: entry.name,
+                path: entry.path,
                 status: match &run {
                     None => Status::Skipped,
                     Some(Ok(())) => Status::Cleaned,
@@ -314,13 +431,60 @@ pub fn execute(env: &Env, plan: Plan, before: &Scan) -> (Outcome, Scan) {
     let freed_bytes = disks.iter().map(|d| d.freed_bytes).sum();
     let complete = disks.iter().all(|d| d.complete);
     let outcome = Outcome {
+        attempted: attempted_paths,
         level: plan.level,
+        not_selected: plan.not_selected,
         results,
         disks,
         freed_bytes,
         complete,
     };
     (outcome, after)
+}
+
+/// Whether two paths lead to the same place, however they are spelled.
+fn same_folder(a: &Path, b: &Path) -> bool {
+    a == b
+        || matches!((std::fs::canonicalize(a), std::fs::canonicalize(b)), (Ok(a), Ok(b)) if a == b)
+}
+
+/// Checks that git tracks nothing in the folder at `path`, since what git tracks
+/// is not something a toolchain can produce again. Without git, or outside a
+/// repository, nothing is tracked. A git that will not answer counts against
+/// deleting.
+fn tracked_by_git(env: &Env, path: &Path) -> Result<(), String> {
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned());
+    let (Some(name), Some(parent)) = (name, path.parent()) else {
+        return Ok(());
+    };
+    match env.ask_tool("git", &["ls-files", "--", &name], Some(parent)) {
+        ToolAnswer::Absent | ToolAnswer::Failed => Ok(()),
+        ToolAnswer::TimedOut => Err("git did not answer whether it tracks this folder".into()),
+        ToolAnswer::Printed(files) if files.trim().is_empty() => Ok(()),
+        ToolAnswer::Printed(_) => Err("git tracks files in this folder".into()),
+    }
+}
+
+/// Permanently deletes a project artifact, once more checking that it is one.
+/// Links inside it are removed, not followed.
+fn delete_artifact(path: Option<&Path>, kind: &ProjectArtifactKind) -> Result<(), String> {
+    let path = path.ok_or("no path to delete")?;
+    let parent = path.parent().ok_or("no folder around it")?;
+    let meta = std::fs::symlink_metadata(path).map_err(|e| e.to_string())?;
+    if !meta.is_dir() {
+        return Err(format!("{} is no longer a folder", path.display()));
+    }
+    if !kind.markers.iter().any(|m| parent.join(m).is_file()) {
+        return Err(format!(
+            "{} no longer has {} beside it",
+            path.display(),
+            kind.markers.join(" or ")
+        ));
+    }
+    if discover::holds_another_disk(path) {
+        return Err(format!("another disk is mounted inside {}", path.display()));
+    }
+    std::fs::remove_dir_all(path).map_err(|e| e.to_string())
 }
 
 fn reclaimable_at<'a>(scan: &'a Scan, entry: &PlanEntry) -> Option<&'a Reclaimable> {
@@ -332,7 +496,20 @@ fn reclaimable_at<'a>(scan: &'a Scan, entry: &PlanEntry) -> Option<&'a Reclaimab
 
 #[cfg(test)]
 mod tests {
-    use super::version_at_least;
+    use super::{catalog, delete_artifact, version_at_least};
+
+    #[test]
+    fn a_folder_that_lost_its_marker_since_the_plan_is_not_deleted() {
+        let dir = tempfile::tempdir().unwrap();
+        let modules = dir.path().join("node_modules");
+        std::fs::create_dir(&modules).unwrap();
+        let kind = catalog::project_artifact("node_modules").unwrap();
+
+        let result = delete_artifact(Some(&modules), kind);
+
+        assert!(result.unwrap_err().contains("package.json"));
+        assert!(modules.exists());
+    }
 
     #[test]
     fn versions_compare_by_numeric_parts() {

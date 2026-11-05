@@ -4,8 +4,9 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::io::Read;
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use crate::process::ToolProcess;
@@ -19,6 +20,7 @@ type ToolCall = (String, Vec<String>);
 pub struct Env {
     home: Option<PathBuf>,
     local_app_data: Option<PathBuf>,
+    app_data: Option<PathBuf>,
     path: Option<OsString>,
     cwd: PathBuf,
     answers: RefCell<HashMap<ToolCall, Option<String>>>,
@@ -35,6 +37,7 @@ impl Env {
         Env {
             home: home.map(PathBuf::from),
             local_app_data: var("LOCALAPPDATA").map(PathBuf::from),
+            app_data: var("APPDATA").map(PathBuf::from),
             path: var("PATH"),
             cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             answers: RefCell::new(HashMap::new()),
@@ -68,6 +71,47 @@ impl Env {
         }
     }
 
+    /// The folder clch keeps its settings in: the same folder as its data on
+    /// macOS, `%APPDATA%\\clch` on Windows, whose default
+    /// `~\\AppData\\Roaming` stands in when the variable is not set.
+    pub fn config_dir(&self) -> Option<PathBuf> {
+        if cfg!(windows) {
+            self.app_data
+                .clone()
+                .or_else(|| {
+                    self.home
+                        .as_ref()
+                        .map(|h| h.join("AppData").join("Roaming"))
+                })
+                .map(|d| d.join("clch"))
+        } else {
+            self.data_dir()
+        }
+    }
+
+    /// Folders in the home folder that the operating system keeps for
+    /// applications.
+    pub fn application_folders(&self) -> Vec<PathBuf> {
+        let name = if cfg!(windows) { "AppData" } else { "Library" };
+        self.home.iter().map(|h| h.join(name)).collect()
+    }
+
+    /// `path` made absolute against the folder clch was started in, with `.` and
+    /// `..` resolved by name.
+    pub fn absolute(&self, path: &Path) -> PathBuf {
+        let mut absolute = PathBuf::new();
+        for part in self.cwd.join(path).components() {
+            match part {
+                Component::CurDir => {}
+                Component::ParentDir => {
+                    absolute.pop();
+                }
+                other => absolute.push(other),
+            }
+        }
+        absolute
+    }
+
     /// The full path of `tool` on `PATH`, honouring `PATHEXT` on Windows.
     pub fn find_tool(&self, tool: &str) -> Option<PathBuf> {
         which::which_in(tool, self.path.as_ref(), &self.cwd).ok()
@@ -86,7 +130,10 @@ impl Env {
         if let Some(answer) = self.answers.borrow().get(&key) {
             return answer.clone();
         }
-        let answer = self.run_tool(tool, args).and_then(|out| single_line(&out));
+        let answer = match self.ask_tool(tool, args, self.home.as_deref()) {
+            ToolAnswer::Printed(out) => single_line(&out),
+            _ => None,
+        };
         self.answers.borrow_mut().insert(key, answer.clone());
         answer
     }
@@ -119,31 +166,65 @@ impl Env {
         command
     }
 
-    fn run_tool(&self, tool: &str, args: &[&str]) -> Option<String> {
-        let program = self.find_tool(tool)?;
-        let mut command = self.command(program, args);
-        command.stdout(Stdio::piped()).stderr(Stdio::null());
-        let mut tool = ToolProcess::spawn(&mut command, true).ok()?;
+    /// Asks `tool args` a question from the folder `dir`, within the time limit.
+    pub fn ask_tool(&self, tool: &str, args: &[&str], dir: Option<&Path>) -> ToolAnswer {
+        let Some(program) = self.find_tool(tool) else {
+            return ToolAnswer::Absent;
+        };
+        let mut command = Command::new(program);
+        command
+            .args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        if let Some(dir) = dir.filter(|d| d.is_dir()) {
+            command.current_dir(dir);
+        }
+        let Ok(mut process) = ToolProcess::spawn(&mut command, true) else {
+            return ToolAnswer::Failed;
+        };
+        let stdout = process.child().stdout.take();
+        let (printed, reading) = mpsc::channel();
+        std::thread::spawn(move || {
+            let mut out = String::new();
+            if let Some(mut stdout) = stdout {
+                let _ = stdout.read_to_string(&mut out);
+            }
+            let _ = printed.send(out);
+        });
         let deadline = Instant::now() + TOOL_TIMEOUT;
         let status = loop {
-            match tool.child().try_wait() {
+            match process.child().try_wait() {
                 Ok(Some(status)) => break status,
                 Ok(None) if Instant::now() < deadline => {
                     std::thread::sleep(Duration::from_millis(20))
                 }
                 _ => {
-                    tool.kill_tree();
-                    return None;
+                    process.kill_tree();
+                    return ToolAnswer::TimedOut;
                 }
             }
         };
-        if !status.success() {
-            return None;
+        let left = deadline.saturating_duration_since(Instant::now());
+        match reading.recv_timeout(left) {
+            Ok(out) if status.success() => ToolAnswer::Printed(out),
+            Ok(_) => ToolAnswer::Failed,
+            Err(_) => {
+                process.kill_tree();
+                ToolAnswer::TimedOut
+            }
         }
-        let mut out = String::new();
-        tool.child().stdout.take()?.read_to_string(&mut out).ok()?;
-        Some(out)
     }
+}
+
+/// What came of asking a tool a question.
+#[derive(Debug, PartialEq, Eq)]
+pub enum ToolAnswer {
+    Absent,
+    /// It could not start, or it exited with a failure.
+    Failed,
+    TimedOut,
+    Printed(String),
 }
 
 fn single_line(output: &str) -> Option<String> {

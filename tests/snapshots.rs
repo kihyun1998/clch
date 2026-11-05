@@ -231,7 +231,7 @@ fn a_scan_with_history_says_so() {
 fn an_unusable_store_is_not_reported_as_new() {
     let sb = Sandbox::new();
     npm_cache_with(&sb, 10);
-    sb.write_file(&sb.data_dir(), 1);
+    std::fs::create_dir_all(sb.data_dir().join("clch.db")).unwrap();
 
     let out = sb.clch().args(["scan", "--json"]).output().unwrap();
     assert!(out.status.success());

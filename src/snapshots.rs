@@ -10,12 +10,12 @@ use serde::Serialize;
 
 use crate::catalog::Kind;
 use crate::env::Env;
-use crate::scan::{ChangeState, Scan};
+use crate::scan::{ChangeState, Scan, UNKNOWN_DISK};
 
 /// How long a store operation waits for another clch run.
 const BUSY_WAIT: Duration = Duration::from_secs(10);
 
-const SCHEMA_VERSION: u32 = 2;
+const SCHEMA_VERSION: u32 = 3;
 
 const SCHEMA_V1: &str = "
 CREATE TABLE snapshot (
@@ -44,6 +44,12 @@ CREATE TABLE disk_total (
     complete INTEGER NOT NULL,
     PRIMARY KEY (snapshot_id, disk)
 );
+";
+
+const SCHEMA_V3: &str = "
+ALTER TABLE reclaimable_size ADD COLUMN gone INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE snapshot ADD COLUMN partial INTEGER NOT NULL DEFAULT 0;
+CREATE INDEX reclaimable_size_history ON reclaimable_size (reclaimable_id, path, snapshot_id);
 ";
 
 /// A reclaimable that the latest snapshot had and a new scan did not find.
@@ -92,9 +98,22 @@ pub fn track(env: &Env, scan: &mut Scan) -> Result<(), StoreError> {
     store.record(scan)
 }
 
-/// Records `scan` as a new snapshot without comparing it.
-pub fn record(env: &Env, scan: &Scan) -> Result<(), StoreError> {
-    Store::in_data_folder(env)?.record(scan)
+/// Like `track` for the scan after a cleanup, where only what the cleanup itself
+/// removed counts as settled; anything else that went missing stays to be
+/// reported by the next scan.
+pub fn track_after_cleanup(
+    env: &Env,
+    scan: &mut Scan,
+    cleaned: &[(String, PathBuf)],
+) -> Result<(), StoreError> {
+    let mut store = Store::in_data_folder(env)?;
+    store.compare(scan)?;
+    scan.gone.retain(|g| {
+        cleaned
+            .iter()
+            .any(|(id, path)| *id == g.id && *path == g.path)
+    });
+    store.record(scan)
 }
 
 pub struct Store {
@@ -120,50 +139,67 @@ impl Store {
         Ok(Store { conn })
     }
 
-    /// Fills each reclaimable's `change_bytes` from the latest snapshot and
-    /// lists what that snapshot had and `scan` did not find.
+    /// Fills each reclaimable's change from the last size recorded for it, and
+    /// lists what was last seen, should be found by `scan`, and was not.
     pub fn compare(&self, scan: &mut Scan) -> Result<(), StoreError> {
         let mut stmt = self.conn.prepare(
-            "SELECT reclaimable_id, kind, path, size_bytes, complete FROM reclaimable_size
-             WHERE snapshot_id = (SELECT max(id) FROM snapshot)",
+            "SELECT r.snapshot_id, r.reclaimable_id, r.kind, r.path, r.size_bytes, r.complete,
+                    r.disk, r.gone
+             FROM reclaimable_size r
+             JOIN (SELECT reclaimable_id, path, max(snapshot_id) AS latest
+                   FROM reclaimable_size GROUP BY reclaimable_id, path) l
+               ON r.reclaimable_id = l.reclaimable_id AND r.path = l.path
+              AND r.snapshot_id = l.latest",
         )?;
-        let mut previous: HashMap<(String, Option<String>), Gone> = stmt
-            .query_map([], |row| {
-                let id: String = row.get(0)?;
-                let kind = row.get::<_, String>(1)?.parse::<Kind>().map_err(|e| {
-                    rusqlite::Error::FromSqlConversionFailure(
-                        1,
-                        rusqlite::types::Type::Text,
-                        e.into(),
-                    )
-                })?;
-                let path: String = row.get(2)?;
-                let key = identity(kind, &id, &path);
-                let previous_bytes = row.get::<_, i64>(3)? as u64;
-                let complete: bool = row.get(4)?;
-                let path = PathBuf::from(path);
-                let gone = Gone {
-                    id,
-                    kind,
-                    path,
-                    previous_bytes,
-                    complete,
-                };
-                Ok((key, gone))
-            })?
-            .collect::<rusqlite::Result<_>>()?;
+        let rows = stmt.query_map([], |row| {
+            let kind = row.get::<_, String>(2)?.parse::<Kind>().map_err(|e| {
+                rusqlite::Error::FromSqlConversionFailure(2, rusqlite::types::Type::Text, e.into())
+            })?;
+            Ok(LastSeen {
+                snapshot_id: row.get(0)?,
+                id: row.get(1)?,
+                kind,
+                path: row.get(3)?,
+                size_bytes: row.get(4)?,
+                complete: row.get(5)?,
+                disk: row.get(6)?,
+                gone: row.get(7)?,
+            })
+        })?;
+        let mut last_seen: HashMap<(String, Option<String>), LastSeen> = HashMap::new();
+        for row in rows {
+            let row = row?;
+            let key = identity(row.kind, &row.id, &row.path);
+            match last_seen.get(&key) {
+                Some(newer) if newer.snapshot_id > row.snapshot_id => {}
+                _ => {
+                    last_seen.insert(key, row);
+                }
+            }
+        }
         for r in &mut scan.reclaimables {
             let key = identity(r.kind, &r.id, &r.path.display().to_string());
-            match previous.remove(&key) {
+            match last_seen.remove(&key) {
                 None => r.change_state = ChangeState::New,
+                Some(before) if before.gone => r.change_state = ChangeState::New,
                 Some(before) if before.complete && r.complete => {
                     r.change_state = ChangeState::Known;
-                    r.change_bytes = Some(r.size_bytes as i64 - before.previous_bytes as i64);
+                    r.change_bytes = Some(r.size_bytes as i64 - before.size_bytes);
                 }
                 Some(_) => r.change_state = ChangeState::Unknown,
             }
         }
-        scan.gone = previous.into_values().collect();
+        scan.gone = last_seen
+            .into_values()
+            .filter(|row| !row.gone && should_be_found(row, scan))
+            .map(|row| Gone {
+                id: row.id,
+                kind: row.kind,
+                path: PathBuf::from(row.path),
+                previous_bytes: row.size_bytes as u64,
+                complete: row.complete,
+            })
+            .collect();
         scan.gone
             .sort_by(|a, b| (&a.id, &a.path).cmp(&(&b.id, &b.path)));
         scan.history_available = true;
@@ -176,8 +212,8 @@ impl Store {
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         tx.execute(
-            "INSERT INTO snapshot (taken_at_ms) VALUES (?1)",
-            params![scan.taken_at_ms],
+            "INSERT INTO snapshot (taken_at_ms, partial) VALUES (?1, ?2)",
+            params![scan.taken_at_ms, scan.partial],
         )?;
         let snapshot_id = tx.last_insert_rowid();
         {
@@ -195,6 +231,19 @@ impl Store {
                     r.size_bytes as i64,
                     r.disk,
                     r.complete
+                ])?;
+            }
+            let mut insert = tx.prepare(
+                "INSERT INTO reclaimable_size
+                    (snapshot_id, reclaimable_id, kind, path, size_bytes, complete, gone)
+                 VALUES (?1, ?2, ?3, ?4, 0, 1, 1)",
+            )?;
+            for g in &scan.gone {
+                insert.execute(params![
+                    snapshot_id,
+                    g.id,
+                    g.kind.as_str(),
+                    g.path.display().to_string()
                 ])?;
             }
             let mut insert = tx.prepare(
@@ -217,11 +266,38 @@ impl Store {
     }
 }
 
+/// The last row recorded for a reclaimable.
+struct LastSeen {
+    snapshot_id: i64,
+    id: String,
+    kind: Kind,
+    path: String,
+    size_bytes: i64,
+    complete: bool,
+    disk: Option<String>,
+    gone: bool,
+}
+
+/// Whether `scan` should have found what `row` recorded, were it still there.
+fn should_be_found(row: &LastSeen, scan: &Scan) -> bool {
+    match row.kind {
+        Kind::ToolCache => {
+            !Path::new(&row.path).is_dir()
+                && row
+                    .disk
+                    .as_deref()
+                    .is_none_or(|disk| disk == UNKNOWN_DISK || Path::new(disk).is_dir())
+        }
+        Kind::ProjectArtifact => scan.covers(Path::new(&row.path)),
+    }
+}
+
 /// What makes a reclaimable the same one across snapshots: a tool cache is one
-/// per machine wherever it lives.
-fn identity(kind: Kind, id: &str, _path: &str) -> (String, Option<String>) {
+/// per machine wherever it lives, a project artifact is the one at its path.
+fn identity(kind: Kind, id: &str, path: &str) -> (String, Option<String>) {
     match kind {
         Kind::ToolCache => (id.to_string(), None),
+        Kind::ProjectArtifact => (id.to_string(), Some(path.to_string())),
     }
 }
 
@@ -247,6 +323,9 @@ fn migrate(conn: &mut Connection) -> Result<(), Migration> {
     }
     if version < 2 {
         tx.execute_batch(SCHEMA_V2)?;
+    }
+    if version < 3 {
+        tx.execute_batch(SCHEMA_V3)?;
     }
     tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     tx.commit()?;

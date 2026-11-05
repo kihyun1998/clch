@@ -11,7 +11,8 @@ Each `clch scan`, and each `clch clean --yes` once it finishes, writes a snapsho
 ## Comparing
 
 - **A tool cache is the same reclaimable wherever it lives**, so its history follows a moved cache. Path spelling, a symlink or npm falling back to its default location would otherwise break it.
-- **What the latest snapshot had and this scan did not find is reported as gone**, once, with its last size. It is compared only with the latest snapshot, so one that returns later is `new`.
+- **Each reclaimable is compared with the last size recorded for it, not with the latest snapshot**, so one a one-off scan root left out, or one on a disk that was unplugged, keeps its history.
+- **What this scan should have found and did not is reported as gone**, once, with its last size, and a marker row in the snapshot records that. One that returns after that is `new`. A project artifact should have been found only if a scan root covers it and that root was there and fully readable; a tool cache, if its folder is gone and its disk attached.
 - **`new` and `unknown` differ.** `new` means the store has no earlier size for it. `unknown` means either the store could not be used, which is also `history_available: false` in JSON, or one of the two measurements is a lower bound. A store that cannot be used never fails a scan.
 - **Order snapshots by id, not time.** `taken_at_ms` is when the scan started, from the system clock, which can go backwards and differ between overlapping runs.
 
@@ -22,3 +23,7 @@ Each `clch scan`, and each `clch clean --yes` once it finishes, writes a snapsho
 ## What a snapshot keeps
 
 Each reclaimable's size, disk and completeness, and each disk's free space and reclaimable total. The disk totals are stored because they cannot be rebuilt: adding up reclaimables counts a shared hard-linked file more than once.
+
+A snapshot from one-off scan roots is marked `partial`, for #13 to leave out of per-disk history, since its disk totals cover only part of what the configured roots would.
+
+After a cleanup, only what the cleanup itself removed is marked gone, so something deleted by hand still gets reported by the next scan.

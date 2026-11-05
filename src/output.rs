@@ -1,10 +1,23 @@
 //! Rendering results for people.
 
+use std::path::Path;
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use crate::catalog::{self, Kind};
 use crate::clean::{Level, Outcome, Plan, Status};
-use crate::scan::{ChangeState, Scan};
+use crate::scan::{ChangeState, MS_PER_DAY, Scan};
 
 /// A byte count in decimal units (kB, MB, GB).
+/// `path` with control characters replaced, so that a folder's name cannot move
+/// the cursor or invent a row in a table.
+fn shown(path: &Path) -> String {
+    path.display()
+        .to_string()
+        .chars()
+        .map(|c| if c.is_control() { '?' } else { c })
+        .collect()
+}
+
 pub fn human_size(bytes: u64) -> String {
     const UNITS: [&str; 5] = ["B", "kB", "MB", "GB", "TB"];
     let mut value = bytes as f64;
@@ -30,6 +43,15 @@ pub fn human_change(change: Option<i64>) -> String {
     }
 }
 
+/// How long before `now_ms` the moment `ms` was, in whole days.
+fn days_ago(ms: i64, now_ms: i64) -> String {
+    match (now_ms - ms).max(0) / MS_PER_DAY {
+        0 => "today".to_string(),
+        1 => "1 day ago".to_string(),
+        days => format!("{days} days ago"),
+    }
+}
+
 /// A size, marked as a lower bound when part of it could not be read.
 fn bounded(bytes: u64, complete: bool) -> String {
     if complete {
@@ -52,11 +74,27 @@ fn estimated(bytes: u64, complete: bool) -> String {
 fn kind_label(kind: Kind) -> &'static str {
     match kind {
         Kind::ToolCache => "tool cache",
+        Kind::ProjectArtifact => "project artifact",
     }
 }
 
 pub fn scan_table(scan: &Scan) -> String {
     let mut out = reclaimables_table(scan);
+    if scan.project_artifacts_skipped {
+        out.push_str(
+            "\nProject artifacts were not looked for: no scan roots are set. \
+             Add one with `clch roots add <folder>`.\n",
+        );
+    }
+    for root in &scan.unavailable_roots {
+        out.push_str(&format!("\nScan root not available: {}\n", shown(root)));
+    }
+    for root in &scan.incomplete_roots {
+        out.push_str(&format!(
+            "\nPart of this scan root could not be read: {}\n",
+            shown(root)
+        ));
+    }
     if !scan.disks.is_empty() {
         let rows: Vec<[String; 3]> = scan
             .disks
@@ -89,7 +127,7 @@ pub fn scan_table(scan: &Scan) -> String {
                             human_change(Some(-(g.previous_bytes as i64)))
                         )
                     },
-                    g.path.display().to_string(),
+                    shown(&g.path),
                 ]
             })
             .collect();
@@ -102,7 +140,7 @@ fn reclaimables_table(scan: &Scan) -> String {
     if scan.reclaimables.is_empty() {
         return "No reclaimables found.\n".to_string();
     }
-    let rows: Vec<[String; 6]> = scan
+    let rows: Vec<[String; 7]> = scan
         .reclaimables
         .iter()
         .map(|r| {
@@ -116,11 +154,24 @@ fn reclaimables_table(scan: &Scan) -> String {
                     ChangeState::Unknown => "unknown".to_string(),
                 },
                 r.disk.clone().unwrap_or_else(|| "unknown".to_string()),
-                r.path.display().to_string(),
+                r.last_modified_ms
+                    .map_or("-".to_string(), |ms| days_ago(ms, scan.taken_at_ms)),
+                shown(&r.path),
             ]
         })
         .collect();
-    table(["KIND", "NAME", "SIZE", "CHANGE", "DISK", "PATH"], &rows)
+    table(
+        [
+            "KIND",
+            "NAME",
+            "SIZE",
+            "CHANGE",
+            "DISK",
+            "LAST CHANGED",
+            "PATH",
+        ],
+        &rows,
+    )
 }
 
 fn level_label(level: Level) -> &'static str {
@@ -131,15 +182,26 @@ fn level_label(level: Level) -> &'static str {
 }
 
 pub fn plan_table(plan: &Plan) -> String {
-    let mut out = format!(
-        "Plan: {}. Nothing has been removed.\n\n",
+    let heading = if plan.uses_level() {
         level_label(plan.level)
-    );
-    if plan.plan.is_empty() {
+    } else {
+        "delete project artifacts"
+    };
+    let mut out = format!("Plan: {heading}. Nothing has been removed.\n\n");
+    if plan.project_artifacts_skipped {
+        out.push_str(
+            "Project artifacts were not looked for: no scan roots are set. \
+             Add one with `clch roots add <folder>`.\n\n",
+        );
+    }
+    if plan.plan.is_empty() && plan.not_selected == 0 {
         out.push_str("No reclaimables found.\n");
         return out;
     }
-    let rows: Vec<[String; 3]> = plan
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as i64);
+    let rows: Vec<[String; 5]> = plan
         .plan
         .iter()
         .map(|e| {
@@ -153,16 +215,37 @@ pub fn plan_table(plan: &Plan) -> String {
                 (None, Some(r)) => format!("skipped: {r}"),
                 _ => String::new(),
             };
-            [e.name.clone(), action, space]
+            let path = e.path.as_ref().map_or(String::new(), |p| shown(p));
+            let changed = e
+                .last_modified_ms
+                .map_or(String::new(), |ms| days_ago(ms, now));
+            [e.name.clone(), action, space, changed, path]
         })
         .collect();
-    out.push_str(&table(["NAME", "ACTION", "SPACE"], &rows));
-    out.push_str("\nRun again with --yes to carry out this plan.\n");
+    out.push_str(&table(
+        ["NAME", "ACTION", "SPACE", "LAST CHANGED", "PATH"],
+        &rows,
+    ));
+    if plan.expected_total_bytes > 0 {
+        out.push_str(&format!(
+            "\nFrees at most {}.\n",
+            human_size(plan.expected_total_bytes)
+        ));
+    }
+    if plan.not_selected > 0 {
+        out.push_str(&format!(
+            "\n{} project artifact(s) not selected: name a kind or a path, or use --older-than-days.\n",
+            plan.not_selected
+        ));
+    }
+    if plan.plan.iter().any(|e| e.cleanable) {
+        out.push_str("\nRun again with --yes to carry out this plan.\n");
+    }
     out
 }
 
 pub fn outcome_table(outcome: &Outcome) -> String {
-    let rows: Vec<[String; 3]> = outcome
+    let rows: Vec<[String; 4]> = outcome
         .results
         .iter()
         .map(|r| {
@@ -171,10 +254,16 @@ pub fn outcome_table(outcome: &Outcome) -> String {
                 Status::Skipped => format!("skipped: {}", r.reason.as_deref().unwrap_or_default()),
                 Status::Failed => format!("failed: {}", r.output.as_deref().unwrap_or_default()),
             };
-            [r.name.clone(), result, estimated(r.freed_bytes, r.complete)]
+            let path = r.path.as_ref().map_or(String::new(), |p| shown(p));
+            [
+                r.name.clone(),
+                result,
+                estimated(r.freed_bytes, r.complete),
+                path,
+            ]
         })
         .collect();
-    let mut out = table(["NAME", "RESULT", "FREED"], &rows);
+    let mut out = table(["NAME", "RESULT", "FREED", "PATH"], &rows);
     if !outcome.disks.is_empty() {
         out.push('\n');
         let rows: Vec<[String; 2]> = outcome

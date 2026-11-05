@@ -10,12 +10,14 @@ use crate::env::Env;
 #[serde(rename_all = "kebab-case")]
 pub enum Kind {
     ToolCache,
+    ProjectArtifact,
 }
 
 impl Kind {
     pub fn as_str(self) -> &'static str {
         match self {
             Kind::ToolCache => "tool-cache",
+            Kind::ProjectArtifact => "project-artifact",
         }
     }
 }
@@ -26,6 +28,7 @@ impl std::str::FromStr for Kind {
     fn from_str(s: &str) -> Result<Self, String> {
         match s {
             "tool-cache" => Ok(Kind::ToolCache),
+            "project-artifact" => Ok(Kind::ProjectArtifact),
             other => Err(format!("unknown kind of reclaimable: {other}")),
         }
     }
@@ -80,6 +83,33 @@ pub fn tool_caches() -> &'static [ToolCacheKind] {
 
 pub fn tool_cache(id: &str) -> Option<&'static ToolCacheKind> {
     tool_caches().iter().find(|k| k.id == id)
+}
+
+/// One kind of project artifact: the folder's name and the files, any of
+/// which beside it marks it as what its toolchain produced.
+#[derive(Debug)]
+pub struct ProjectArtifactKind {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub dir_name: &'static str,
+    pub markers: &'static [&'static str],
+    /// Whether a folder of this name without a marker may still hold
+    /// projects, and so is searched.
+    pub search_unmarked: bool,
+}
+
+pub fn project_artifacts() -> &'static [ProjectArtifactKind] {
+    &[ProjectArtifactKind {
+        id: "node_modules",
+        name: "node_modules",
+        dir_name: "node_modules",
+        markers: &["package.json"],
+        search_unmarked: false,
+    }]
+}
+
+pub fn project_artifact(id: &str) -> Option<&'static ProjectArtifactKind> {
+    project_artifacts().iter().find(|k| k.id == id)
 }
 
 mod npm {

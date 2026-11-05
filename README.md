@@ -10,7 +10,16 @@ clch scan --json   # the same, as JSON
 clch clean         # show what cleaning would do; nothing is removed
 clch clean --yes   # clean: only what nothing uses, through each tool's own command
 clch clean npm-cache --full --yes   # remove all of one reclaimable
+
+clch roots add ~/code              # search a folder for project artifacts
+clch scan --older-than-days 30     # list only artifacts in projects not changed for 30 days
+clch clean node_modules            # show which node_modules would be deleted
+clch clean node_modules --yes      # delete them, permanently
+clch clean ~/code/app/node_modules --yes        # delete one
+clch clean --older-than-days 30 --yes           # delete artifacts in projects not changed for 30 days
 ```
+
+Project artifacts are deleted only when you name them or pick them by age; `clch clean --yes` alone leaves them alone. Deleting is permanent, since moving them to the Trash would give no space back. A folder counts as a project artifact only when its marker file sits beside it, such as `package.json` beside `node_modules`, and one git tracks files in is skipped.
 
 A cleanup that fails is reported with the tool's output and makes `clch clean` exit with status 1; the others still run.
 

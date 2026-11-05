@@ -4,6 +4,7 @@ use std::collections::HashSet;
 use std::fs;
 use std::io;
 use std::path::Path;
+use std::time::UNIX_EPOCH;
 
 /// What measuring one reclaimable found.
 #[derive(Debug, Clone, Copy, Default)]
@@ -15,6 +16,8 @@ pub struct Measurement {
     /// False when something under it could not be read, making `bytes` a
     /// lower bound.
     pub complete: bool,
+    /// When a file under it last changed, in milliseconds since the Unix epoch.
+    pub last_modified_ms: Option<i64>,
 }
 
 /// Measures reclaimables, remembering hard-linked files across them.
@@ -100,6 +103,10 @@ impl Walk<'_> {
     }
 
     fn file(&mut self, path: &Path, meta: &fs::Metadata) {
+        if let Some(ms) = modified_ms(meta) {
+            let latest = self.result.last_modified_ms.get_or_insert(ms);
+            *latest = (*latest).max(ms);
+        }
         let info = match file_info(path, meta) {
             Ok(info) => info,
             Err(e) => return self.failed(&e),
@@ -119,6 +126,11 @@ impl Walk<'_> {
             }
         }
     }
+}
+
+fn modified_ms(meta: &fs::Metadata) -> Option<i64> {
+    let since_epoch = meta.modified().ok()?.duration_since(UNIX_EPOCH).ok()?;
+    Some(since_epoch.as_millis() as i64)
 }
 
 #[cfg(unix)]

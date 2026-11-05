@@ -67,6 +67,25 @@ impl Sandbox {
         }
     }
 
+    /// The file clch keeps its settings in.
+    pub fn config_file(&self) -> PathBuf {
+        if cfg!(windows) {
+            self.app_data().join("clch").join("config.toml")
+        } else {
+            self.home()
+                .join("Library/Application Support/clch/config.toml")
+        }
+    }
+
+    /// Makes `dir` hold a `node_modules` of `count` blocks with its marker
+    /// file beside it, and returns the `node_modules` folder.
+    pub fn node_project(&self, dir: &Path, count: usize) -> PathBuf {
+        self.write_file(&dir.join("package.json"), 1);
+        let modules = dir.join("node_modules");
+        self.write_file(&modules.join("dep/index.js"), count);
+        modules
+    }
+
     /// The npm cache folder npm uses when nothing configures it.
     pub fn default_npm_cache(&self) -> PathBuf {
         if cfg!(windows) {
