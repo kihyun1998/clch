@@ -264,7 +264,9 @@ pub fn removes(path: &Path) -> Reply {
 /// A fake tool answering exactly these command lines, and nothing otherwise.
 pub fn tool(sb: &Sandbox, name: &str, replies: Vec<(&str, Reply)>) {
     let mut unix = String::from("case \"$*\" in\n");
-    let mut windows = String::from("set \"ARGS=%*\"\r\n");
+    // Rust quotes an argument holding `=` or `{` for a batch file.
+    let mut windows =
+        String::from("set \"ARGS=%*\"\r\nif defined ARGS set \"ARGS=%ARGS:\"=%\"\r\n");
     let mut labels = String::new();
     for (i, (args, reply)) in replies.iter().enumerate() {
         unix.push_str(&format!("  '{args}') {} ;;\n", reply.unix));

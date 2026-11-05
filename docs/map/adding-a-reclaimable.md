@@ -20,7 +20,7 @@ A kind is an entry in `src/catalog.rs`; scan, clean, snapshots and output pick i
 
 ## Tests
 
-Seam 1 in `tests/common/mod.rs` runs the binary in a sandbox. Fixture sizes are whole blocks (`write_file` and `blocks`), since a size is allocated space. `tool`, `prints`, `says` and `removes` make a fake tool, and `calls` shows what it was asked. On Windows a batch file must spell paths with `\`, and end each path of a fake with a top-level `exit /b`.
+Seam 1 in `tests/common/mod.rs` runs the binary in a sandbox. Fixture sizes are whole blocks (`write_file` and `blocks`), since a size is allocated space. `tool`, `prints`, `says` and `removes` make a fake tool, and `calls` shows what it was asked. On Windows a batch file must spell paths with `\`, and end each path of a fake with a top-level `exit /b`. Rust quotes an argument holding `=` or `{` for a batch file, so `tool` drops quotes before comparing.
 
 A probe of a real tool sets `HOME` and every variable the tool reads, such as `PNPM_HOME`, `CARGO_HOME`, `GOCACHE` and `UV_CACHE_DIR`, to a temp folder, and checks that it took before cleaning anything. `PNPM_HOME` beat a fake `HOME` once. Never run `clch clean --yes` on real folders.
 
