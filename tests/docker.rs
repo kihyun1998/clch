@@ -644,3 +644,18 @@ fn a_prune_that_failed_gives_no_compaction_guidance() {
     let outcome: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert!(outcome["notes"].as_array().unwrap().is_empty());
 }
+
+#[test]
+fn a_full_image_cleanup_warns_about_images_nothing_can_download_again() {
+    let sb = Sandbox::new();
+    docker(&sb, "Other Engine");
+
+    let full = sb.json(&["clean", "docker-images", "--full"]);
+    let warning = full["plan"][0]["warning"].as_str().unwrap();
+    assert!(warning.contains("docker commit"), "{warning}");
+
+    let unused = sb.json(&["clean", "docker-images"]);
+    assert!(unused["plan"][0].get("warning").is_none(), "{unused}");
+    let build = sb.json(&["clean", "docker-build-cache", "--full"]);
+    assert!(build["plan"][0].get("warning").is_none(), "{build}");
+}

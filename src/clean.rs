@@ -318,7 +318,7 @@ fn entry(env: &Env, r: &Reclaimable, level: Level) -> PlanEntry {
             expected_bytes: Some(r.size_bytes),
             complete: r.complete,
             reason: None,
-            warning: kind.delete_warning.map(str::to_string),
+            warning: kind.full_warning.map(str::to_string),
             method: Some(Method::DeleteCache(deletable)),
             path: Some(r.path.clone()),
             last_modified_ms: None,
@@ -411,7 +411,11 @@ fn entry(env: &Env, r: &Reclaimable, level: Level) -> PlanEntry {
         expected_bytes,
         complete: r.complete,
         reason: None,
-        warning: None,
+        warning: match level {
+            Level::Unused => kind.unused_warning,
+            Level::Full => kind.full_warning,
+        }
+        .map(str::to_string),
         method: Some(Method::Native(tool, args, r.run_from.clone())),
         path: Some(r.path.clone()),
         last_modified_ms: None,

@@ -407,3 +407,69 @@ fn xcode_data_are_macos_only() {
 
     assert!(reclaimable(&scan, "xcode-derived-data").is_none(), "{scan}");
 }
+
+fn warning_of(plan: &serde_json::Value, id: &str) -> Option<String> {
+    let row = plan["plan"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["id"] == id)?;
+    row["warning"].as_str().map(str::to_string)
+}
+
+#[test]
+fn a_full_pub_cleanup_warns_about_activated_tools_and_an_unused_one_does_not() {
+    let sb = Sandbox::new();
+    sb.write_file(&default_pub_cache(&sb).join("hosted").join("package"), 1);
+    tool(&sb, "dart", vec![]);
+
+    let full = sb.json(&["clean", "pub-cache", "--full"]);
+    assert!(
+        warning_of(&full, "pub-cache")
+            .unwrap()
+            .contains("global activate")
+    );
+
+    let unused = sb.json(&["clean", "pub-cache"]);
+    assert_eq!(warning_of(&unused, "pub-cache"), None);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn a_homebrew_cleanup_warns_about_old_formula_versions_at_either_level() {
+    let sb = Sandbox::new();
+    let cache = sb.home().join("Library/Caches/Homebrew");
+    homebrew_files(&sb, &cache);
+    tool(&sb, "brew", vec![("--cache", prints(&cache))]);
+
+    for args in [
+        vec!["clean", "homebrew-cache"],
+        vec!["clean", "homebrew-cache", "--full"],
+    ] {
+        let plan = sb.json(&args);
+        assert!(
+            warning_of(&plan, "homebrew-cache")
+                .unwrap()
+                .contains("old versions"),
+            "{plan}"
+        );
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn deleting_derived_data_warns_about_a_running_build() {
+    let sb = Sandbox::new();
+    sb.write_file(
+        &sb.home().join("Library/Developer/Xcode/DerivedData/App/x"),
+        1,
+    );
+
+    let plan = sb.json(&["clean", "xcode-derived-data", "--full"]);
+
+    assert!(
+        warning_of(&plan, "xcode-derived-data")
+            .unwrap()
+            .contains("build running now")
+    );
+}

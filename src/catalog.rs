@@ -47,8 +47,10 @@ pub struct ToolCacheKind {
     pub cleanup: NativeCleanup,
     /// What a person must be told on Windows after cleaning it.
     pub windows_note: Option<&'static str>,
-    /// What a person must be told before its folder is deleted.
-    pub delete_warning: Option<&'static str>,
+    /// What a person must be told before an unused cleanup of it.
+    pub unused_warning: Option<&'static str>,
+    /// What a person must be told before a full cleanup of it.
+    pub full_warning: Option<&'static str>,
 }
 
 /// Where an instance of a tool cache is.
@@ -151,7 +153,8 @@ pub fn tool_caches() -> &'static [ToolCacheKind] {
                 below_version: None,
             },
             windows_note: None,
-            delete_warning: None,
+            unused_warning: None,
+            full_warning: None,
         },
         ToolCacheKind {
             id: "npx-cache",
@@ -168,7 +171,8 @@ pub fn tool_caches() -> &'static [ToolCacheKind] {
                 below_version: None,
             },
             windows_note: None,
-            delete_warning: None,
+            unused_warning: None,
+            full_warning: None,
         },
         ToolCacheKind {
             id: "pnpm-store",
@@ -185,7 +189,8 @@ pub fn tool_caches() -> &'static [ToolCacheKind] {
                 below_version: None,
             },
             windows_note: None,
-            delete_warning: None,
+            unused_warning: None,
+            full_warning: None,
         },
         ToolCacheKind {
             id: "yarn-cache",
@@ -202,7 +207,8 @@ pub fn tool_caches() -> &'static [ToolCacheKind] {
                 below_version: Some("2.0.0"),
             },
             windows_note: None,
-            delete_warning: None,
+            unused_warning: None,
+            full_warning: None,
         },
         ToolCacheKind {
             id: "yarn-berry-cache",
@@ -219,7 +225,8 @@ pub fn tool_caches() -> &'static [ToolCacheKind] {
                 below_version: None,
             },
             windows_note: None,
-            delete_warning: None,
+            unused_warning: None,
+            full_warning: None,
         },
         ToolCacheKind {
             id: "pip-cache",
@@ -236,7 +243,8 @@ pub fn tool_caches() -> &'static [ToolCacheKind] {
                 below_version: None,
             },
             windows_note: None,
-            delete_warning: None,
+            unused_warning: None,
+            full_warning: None,
         },
         ToolCacheKind {
             id: "uv-cache",
@@ -253,7 +261,8 @@ pub fn tool_caches() -> &'static [ToolCacheKind] {
                 below_version: None,
             },
             windows_note: None,
-            delete_warning: None,
+            unused_warning: None,
+            full_warning: None,
         },
         ToolCacheKind {
             id: "cargo-registry",
@@ -273,7 +282,8 @@ pub fn tool_caches() -> &'static [ToolCacheKind] {
                 below_version: None,
             },
             windows_note: None,
-            delete_warning: Some(cargo::RUNNING_BUILD),
+            unused_warning: None,
+            full_warning: Some(cargo::RUNNING_BUILD),
         },
         ToolCacheKind {
             id: "cargo-git",
@@ -293,7 +303,8 @@ pub fn tool_caches() -> &'static [ToolCacheKind] {
                 below_version: None,
             },
             windows_note: None,
-            delete_warning: Some(cargo::RUNNING_BUILD),
+            unused_warning: None,
+            full_warning: Some(cargo::RUNNING_BUILD),
         },
         ToolCacheKind {
             id: "go-build-cache",
@@ -310,7 +321,8 @@ pub fn tool_caches() -> &'static [ToolCacheKind] {
                 below_version: None,
             },
             windows_note: None,
-            delete_warning: None,
+            unused_warning: None,
+            full_warning: None,
         },
         ToolCacheKind {
             id: "go-module-cache",
@@ -327,7 +339,8 @@ pub fn tool_caches() -> &'static [ToolCacheKind] {
                 below_version: None,
             },
             windows_note: None,
-            delete_warning: None,
+            unused_warning: None,
+            full_warning: None,
         },
         ToolCacheKind {
             id: "docker-build-cache",
@@ -344,7 +357,8 @@ pub fn tool_caches() -> &'static [ToolCacheKind] {
                 below_version: None,
             },
             windows_note: Some(docker::WSL_DISK),
-            delete_warning: None,
+            unused_warning: None,
+            full_warning: None,
         },
         ToolCacheKind {
             id: "docker-images",
@@ -361,7 +375,10 @@ pub fn tool_caches() -> &'static [ToolCacheKind] {
                 below_version: None,
             },
             windows_note: Some(docker::WSL_DISK),
-            delete_warning: None,
+            unused_warning: None,
+            full_warning: Some(
+                "Images made with docker commit or docker load go too, and nothing can download those again.",
+            ),
         },
         ToolCacheKind {
             id: "pub-cache",
@@ -390,7 +407,10 @@ pub fn tool_caches() -> &'static [ToolCacheKind] {
                 below_version: None,
             },
             windows_note: None,
-            delete_warning: None,
+            unused_warning: None,
+            full_warning: Some(
+                "What dart pub global activate installed goes too, until it is activated again.",
+            ),
         },
         ToolCacheKind {
             id: "homebrew-cache",
@@ -407,7 +427,8 @@ pub fn tool_caches() -> &'static [ToolCacheKind] {
                 below_version: None,
             },
             windows_note: None,
-            delete_warning: None,
+            unused_warning: Some(macos::OLD_FORMULAE),
+            full_warning: Some(macos::OLD_FORMULAE),
         },
         ToolCacheKind {
             id: "xcode-derived-data",
@@ -424,7 +445,10 @@ pub fn tool_caches() -> &'static [ToolCacheKind] {
                 below_version: None,
             },
             windows_note: None,
-            delete_warning: None,
+            unused_warning: None,
+            full_warning: Some(
+                "A build running now may fail; the next one builds again from the start.",
+            ),
         },
         ToolCacheKind {
             id: "xcode-device-support",
@@ -441,7 +465,8 @@ pub fn tool_caches() -> &'static [ToolCacheKind] {
                 below_version: None,
             },
             windows_note: None,
-            delete_warning: None,
+            unused_warning: None,
+            full_warning: None,
         },
         ToolCacheKind {
             id: "xcode-simulators",
@@ -458,7 +483,8 @@ pub fn tool_caches() -> &'static [ToolCacheKind] {
                 below_version: None,
             },
             windows_note: None,
-            delete_warning: None,
+            unused_warning: None,
+            full_warning: None,
         },
     ]
 }
@@ -777,6 +803,8 @@ mod dart {
 
 mod macos {
     use super::*;
+
+    pub const OLD_FORMULAE: &str = "brew also removes old versions of installed formulae.";
 
     fn developer(env: &Env, rest: &str) -> Vec<Located> {
         if !cfg!(target_os = "macos") {
