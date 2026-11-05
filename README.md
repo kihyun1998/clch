@@ -33,7 +33,7 @@ clch dashboard            # open it in the browser; Ctrl+C stops it
 clch dashboard --no-open  # print the URL instead
 ```
 
-It shows the same reclaimables per disk, and records a snapshot on each scan. It listens only on 127.0.0.1, on a free port, and its page and every API request need the token in the URL it prints.
+It shows the same reclaimables per disk with their growth over time, and records a snapshot on each scan. Click what to clean, preview the same plan `clch clean` would print, and confirm. It listens only on 127.0.0.1, on a free port, and its page and every API request need the token in the URL it prints.
 
 Building clch from this repository needs Node.js and npm, for the dashboard's UI.
 

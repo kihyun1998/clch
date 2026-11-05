@@ -12,6 +12,19 @@
 - **A scan is a POST**, as it records a snapshot.
 - **`127.0.0.1` is bound by the listener**, and no test can show a bind's address from outside. A port of 0 lets the system pick a free one.
 
+## Cleaning
+
+A CLI preview and its `--yes` are separate runs, so what runs can differ from what was shown. Here the server ties them together.
+
+- **A preview is built from the latest scan and held under an id**, with what was selected, as `Plan` carries how each entry runs and is not sent to the browser. There is only one: a newer preview replaces it, and a cleanup uses it up.
+- **A selection is exact rows, by id and path**, never kinds or an empty list. An empty one means every tool cache in the CLI, so it is refused. Two Docker rows can share a path, so a path alone will not do.
+- **The cleanup scans again and builds the plan again.** If an entry's identity, action or project age differs, nothing runs and the person previews again. So a folder gone, a project edited since, or a different command refuses the plan, and something that appeared is not in it. What a tool's command acts on is not compared: Docker pointed at another local engine since the preview runs there, as it would in the CLI between its two runs. A size that changed does not refuse it: a cache grows all the time, and the entry's meaning is the same.
+- **Only one cleanup runs at a time.**
+- **A refused plan rescans**, since the map beside it no longer matches what the server holds.
+- **The reply holds the scan after the cleanup**, which is its snapshot, so the map updates without a third measurement.
+
+ADR-0005's rules stay in `clean::plan`: a folder git tracks is skipped as in the CLI, and picking a row is what names it.
+
 ## Stopping
 
 Ctrl+C is the system's default for the process. Nothing needs saving: a snapshot is written in one SQLite transaction, and a tool running then shares the process group as it does for the CLI.

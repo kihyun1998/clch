@@ -6,7 +6,8 @@ import { squarify } from "./squarify";
 interface Props {
   items: Reclaimable[];
   focused: Reclaimable | null;
-  onFocus: (r: Reclaimable) => void;
+  selected: Set<Reclaimable>;
+  onToggle: (r: Reclaimable) => void;
 }
 
 /** Below this size in pixels a tile shows no text; the list beside it does. */
@@ -17,7 +18,7 @@ export function colorClass(r: Reclaimable): string {
   return `kind-${r.id.replace(/[^a-z_]/g, "")}`;
 }
 
-export function DiskMap({ items, focused, onFocus }: Props) {
+export function DiskMap({ items, focused, selected, onToggle }: Props) {
   const box = useRef<HTMLDivElement>(null);
   const [area, setArea] = useState({ w: 0, h: 0 });
 
@@ -47,11 +48,12 @@ export function DiskMap({ items, focused, onFocus }: Props) {
         return (
           <button
             key={`${r.id}:${r.path}`}
-            className={`tile ${colorClass(r)}${focused === r ? " focused" : ""}`}
+            className={`tile ${colorClass(r)}${selected.has(r) ? " selected" : ""}${focused === r ? " focused" : ""}`}
             style={{ left: rect.x, top: rect.y, width: rect.w, height: rect.h }}
             aria-label={description}
+            aria-pressed={selected.has(r)}
             title={`${description}\n${r.path}`}
-            onClick={() => onFocus(r)}
+            onClick={() => onToggle(r)}
           >
             {shown && (
               <>

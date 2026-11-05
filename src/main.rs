@@ -195,6 +195,7 @@ fn run(env: &Env, command: Command) -> Result<ExitCode, ConfigError> {
             let selection = Selection {
                 names,
                 older_than_days,
+                ..Selection::default()
             };
             let plan = match clean::plan(env, &found, &selection, level) {
                 Ok(plan) => plan,

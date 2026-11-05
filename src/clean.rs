@@ -69,7 +69,26 @@ pub struct Plan {
     pub tool_notes: Vec<ToolNote>,
 }
 
+/// What must still be so for a plan to be the one a person saw.
+pub type PlanSignature = Vec<(String, Option<PathBuf>, Option<String>, bool, Option<i64>)>;
+
 impl Plan {
+    /// Each entry's identity, action and project age.
+    pub fn signature(&self) -> PlanSignature {
+        self.plan
+            .iter()
+            .map(|e| {
+                (
+                    e.id.clone(),
+                    e.path.clone(),
+                    e.action.clone(),
+                    e.cleanable,
+                    e.last_modified_ms,
+                )
+            })
+            .collect()
+    }
+
     /// Whether anything here is a tool cache, the only thing the cleanup level
     /// changes.
     pub fn uses_level(&self) -> bool {
@@ -154,12 +173,15 @@ pub enum BadName {
 }
 
 /// What to clean. With no `names`, every tool cache; with `older_than_days` and
-/// no `names`, the project artifacts of that age instead.
+/// no `names`, the project artifacts of that age instead. With `exact`, those
+/// rows of the scan and nothing else.
 #[derive(Debug, Default)]
 pub struct Selection {
     /// Kinds of reclaimable by id, and project artifacts by path.
     pub names: Vec<String>,
     pub older_than_days: Option<u64>,
+    /// Rows of the scan, by id and path.
+    pub exact: Vec<(String, PathBuf)>,
 }
 
 /// The plan for cleaning what `selection` picks out of `scan`.
@@ -185,6 +207,12 @@ pub fn plan(env: &Env, scan: &Scan, selection: &Selection, level: Level) -> Resu
         }
     }
     let chosen = |r: &Reclaimable| {
+        if !selection.exact.is_empty() {
+            return selection
+                .exact
+                .iter()
+                .any(|(id, path)| *id == r.id && *path == r.path);
+        }
         let named = if names.is_empty() {
             match selection.older_than_days {
                 Some(_) => r.kind == Kind::ProjectArtifact,

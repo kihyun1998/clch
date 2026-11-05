@@ -2,8 +2,11 @@ import { useCallback, useEffect, useState } from "react";
 import {
   get,
   post,
+  type Cleaned,
   type DiskTotal,
   type History,
+  type Outcome,
+  type Preview,
   type Reclaimable,
   type ReclaimableHistory,
   type Scan,
@@ -51,10 +54,28 @@ export function App() {
   const [history, setHistory] = useState<History | null>(null);
   const [historyFailure, setHistoryFailure] = useState<string | null>(null);
 
+  const [selected, setSelected] = useState<Set<Reclaimable>>(new Set());
+  const [full, setFull] = useState(false);
+  const [preview, setPreview] = useState<Preview | null>(null);
+  const [cleaning, setCleaning] = useState(false);
+  const [outcome, setOutcome] = useState<Outcome | null>(null);
+
+  const loadHistory = useCallback(async () => {
+    try {
+      setHistory(await get<History>("/api/history"));
+      setHistoryFailure(null);
+    } catch (e) {
+      setHistoryFailure(e instanceof Error ? e.message : String(e));
+    }
+  }, []);
+
   const run = useCallback(async () => {
     setScanning(true);
     setFailure(null);
     setFocused(null);
+    setSelected(new Set());
+    setPreview(null);
+    setOutcome(null);
     try {
       const result = await post<Scan>("/api/scan");
       setScan(result);
@@ -63,18 +84,66 @@ export function App() {
           ? now
           : shortest(result.disks),
       );
-      try {
-        setHistory(await get<History>("/api/history"));
-        setHistoryFailure(null);
-      } catch (e) {
-        setHistoryFailure(e instanceof Error ? e.message : String(e));
-      }
+      await loadHistory();
     } catch (e) {
-      setFailure(e instanceof Error ? e.message : String(e));
+      setFailure(`The scan failed: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setScanning(false);
     }
-  }, []);
+  }, [loadHistory]);
+
+  const askPreview = async () => {
+    setFailure(null);
+    try {
+      setPreview(
+        await post<Preview>("/api/preview", {
+          selected: [...selected].map((r) => ({ id: r.id, path: r.path })),
+          full,
+        }),
+      );
+    } catch (e) {
+      setFailure(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const confirm = async () => {
+    if (!preview) return;
+    setCleaning(true);
+    setFailure(null);
+    try {
+      const done = await post<Cleaned>("/api/cleanup", {
+        plan_id: preview.plan_id,
+        confirm: true,
+      });
+      setScan(done.scan);
+      setOutcome(done.outcome);
+      setSelected(new Set());
+      setFocused(null);
+      setPreview(null);
+      setDisk((now) =>
+        now !== null && done.scan.disks.some((d) => d.disk === now)
+          ? now
+          : shortest(done.scan.disks),
+      );
+      await loadHistory();
+    } catch (e) {
+      setCleaning(false);
+      setPreview(null);
+      await run();
+      setFailure(e instanceof Error ? e.message : String(e));
+    } finally {
+      setCleaning(false);
+    }
+  };
+
+  const toggle = (r: Reclaimable) => {
+    setFocused(r);
+    setSelected((now) => {
+      const next = new Set(now);
+      if (!next.delete(r)) next.add(r);
+      return next;
+    });
+  };
 
   useEffect(() => {
     void run();
@@ -82,6 +151,12 @@ export function App() {
 
   const items = scan && disk ? onDisk(scan, disk) : [];
   const shown = items.filter((r) => r.size_bytes > 0);
+  const selectedBytes = [...selected].reduce((sum, r) => sum + r.size_bytes, 0);
+  const free = scan?.disks.find((d) => d.disk === disk)?.free_bytes ?? null;
+  const selectedHere = [...selected]
+    .filter((r) => (r.disk ?? UNKNOWN_DISK) === disk)
+    .reduce((sum, r) => sum + r.size_bytes, 0);
+  const busy = scanning || cleaning;
 
   return (
     <div className="page">
@@ -91,6 +166,7 @@ export function App() {
             key={d.disk}
             className="disk"
             aria-pressed={d.disk === disk}
+            disabled={busy}
             onClick={() => {
               setDisk(d.disk);
               setFocused(null);
@@ -102,12 +178,12 @@ export function App() {
           </button>
         ))}
         <span className="grow" />
-        <button className="link" onClick={() => void run()} disabled={scanning}>
+        <button className="link" onClick={() => void run()} disabled={busy}>
           Scan again
         </button>
       </header>
 
-      {failure && <p className="problem" role="alert">The scan failed: {failure}</p>}
+      {failure && <p className="problem banner" role="alert">{failure}</p>}
 
       {scanning && (
         <div className="scanning" role="status">
@@ -117,15 +193,47 @@ export function App() {
         </div>
       )}
 
-      {scan && !scanning && (
+      {cleaning && (
+        <div className="scanning" role="status">
+          <h1>Cleaning</h1>
+          <div className="progress"><i /></div>
+          <p>clch checks once more that nothing changed, runs each cleanup, then measures again.</p>
+        </div>
+      )}
+
+      {preview && !cleaning && (
+        <PlanScreen
+          preview={preview}
+          onConfirm={() => void confirm()}
+          onBack={() => setPreview(null)}
+        />
+      )}
+
+      {outcome && !busy && !preview && (
+        <ResultScreen outcome={outcome} onBack={() => setOutcome(null)} />
+      )}
+
+      {scan && !busy && !preview && !outcome && (
         <main className="body">
           {shown.length > 0 ? (
-            <DiskMap items={shown} focused={focused} onFocus={setFocused} />
+            <DiskMap items={shown} focused={focused} selected={selected} onToggle={toggle} />
           ) : (
             <p className="map empty">Nothing to reclaim on this disk.</p>
           )}
           <aside className="side">
             <Notes scan={scan} />
+            <section className="panel">
+              <p>After this cleanup, up to</p>
+              <p className="figure">{free === null ? "unknown" : `${size(free + selectedHere)} free`}</p>
+              <p>{size(selectedBytes)} from {selected.size} selected</p>
+              <label className="check">
+                <input type="checkbox" checked={full} onChange={(e) => setFull(e.target.checked)} />
+                Full cleanup: remove all of each tool cache, and download it again later
+              </label>
+              <button className="primary" disabled={selected.size === 0} onClick={() => void askPreview()}>
+                Preview cleanup
+              </button>
+            </section>
             {historyFailure && <p className="problem">History is not available: {historyFailure}</p>}
             {focused ? (
               <Details r={focused} series={seriesOf(history, focused)} />
@@ -140,9 +248,10 @@ export function App() {
                   <button
                     className={focused === r ? "focused" : ""}
                     title={r.path}
-                    onClick={() => setFocused(r)}
+                    aria-pressed={selected.has(r)}
+                    onClick={() => toggle(r)}
                   >
-                    <i className={`swatch ${colorClass(r)}`} />
+                    <i className={`swatch ${selected.has(r) ? "on " : ""}${colorClass(r)}`} />
                     <span className="name">{title(r)}</span>
                     <span>{bounded(r.size_bytes, r.complete)}</span>
                   </button>
@@ -153,6 +262,113 @@ export function App() {
         </main>
       )}
     </div>
+  );
+}
+
+function PlanScreen({
+  preview,
+  onConfirm,
+  onBack,
+}: {
+  preview: Preview;
+  onConfirm: () => void;
+  onBack: () => void;
+}) {
+  const runnable = preview.plan.filter((e) => e.cleanable);
+  return (
+    <main className="sheet">
+      <h1>
+        Clean {runnable.length}
+        {preview.expected_total_bytes > 0 && `, up to ${size(preview.expected_total_bytes)} back`}
+      </h1>
+      <p>
+        {preview.uses_level && (preview.level === "full" ? "Full cleanup. " : "Unused cleanup. ")}
+        Nothing has been removed yet. Deleting is permanent: project artifacts come back only by
+        reinstalling or rebuilding.
+      </p>
+      {preview.tool_notes.map((note) => (
+        <p className="problem" key={note.tool}>Nothing from {note.tool}: {note.reason}.</p>
+      ))}
+      <table>
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Action</th>
+            <th className="number">Space</th>
+          </tr>
+        </thead>
+        <tbody>
+          {preview.plan.map((e) => (
+            <tr key={`${e.id}:${e.path}`}>
+              <td>
+                {e.name}
+                {e.path && <div className="path">{e.path}</div>}
+                {e.last_modified_ms !== undefined && (
+                  <div className="path">{lastChanged(e.last_modified_ms)}</div>
+                )}
+              </td>
+              <td>{e.cleanable ? <code>{e.action}</code> : `Skipped: ${e.reason}`}</td>
+              <td className="number">
+                {e.expected_bytes !== undefined
+                  ? bounded(e.expected_bytes, e.complete)
+                  : e.cleanable
+                    ? "Known after cleaning"
+                    : ""}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div className="actions">
+        <button className="primary" disabled={runnable.length === 0} onClick={onConfirm}>
+          Clean {runnable.length} now
+        </button>
+        <button className="link" onClick={onBack}>Back to the map</button>
+      </div>
+    </main>
+  );
+}
+
+function ResultScreen({ outcome, onBack }: { outcome: Outcome; onBack: () => void }) {
+  const about = outcome.complete ? "" : "about ";
+  return (
+    <main className="sheet">
+      <h1>Freed {about}{size(outcome.freed_bytes)}</h1>
+      {outcome.disks.map((d) => (
+        <p key={d.disk}>
+          {diskLabel(d.disk)}: {d.complete ? "" : "about "}{size(d.freed_bytes)}
+        </p>
+      ))}
+      <table>
+        <tbody>
+          {outcome.results.map((r) => (
+            <tr key={`${r.id}:${r.path}`}>
+              <td>
+                {r.name}
+                {r.path && <div className="path">{r.path}</div>}
+              </td>
+              <td className={r.status === "failed" ? "problem" : ""}>
+                {r.status === "cleaned" && "Cleaned"}
+                {r.status === "skipped" && `Skipped: ${r.reason}`}
+                {r.status === "failed" && <>Failed:<pre>{r.output}</pre></>}
+              </td>
+              <td className="number">
+                {r.complete ? "" : "about "}{size(r.freed_bytes)}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {outcome.tool_notes.map((note) => (
+        <p className="problem" key={note.tool}>Nothing from {note.tool}: {note.reason}.</p>
+      ))}
+      {outcome.notes.map((note) => (
+        <pre className="note" key={note}>{note}</pre>
+      ))}
+      <div className="actions">
+        <button className="link" onClick={onBack}>Back to the map</button>
+      </div>
+    </main>
   );
 }
 
@@ -182,7 +398,7 @@ function Growing({
 }: {
   history: History | null;
   items: Reclaimable[];
-  onFocus: (r: Reclaimable) => void;
+  onFocus: (r: Reclaimable | null) => void;
 }) {
   const grew = items
     .map((r) => ({ r, by: growth(seriesOf(history, r)) }))
