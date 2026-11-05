@@ -1,6 +1,6 @@
 mod common;
 
-use common::{Sandbox, reclaimable};
+use common::{Sandbox, blocks, reclaimable};
 
 fn npm_cache_with(sb: &Sandbox, bytes: usize) {
     let cache = sb.default_npm_cache().join("_cacache");
@@ -43,11 +43,11 @@ fn a_scan_shows_the_change_since_the_previous_snapshot() {
 
     assert_eq!(
         reclaimable(&grown, "npm-cache").unwrap()["change_bytes"],
-        500
+        blocks(500)
     );
     assert_eq!(
         reclaimable(&shrunk, "npm-cache").unwrap()["change_bytes"],
-        -1100
+        blocks(-1100)
     );
 }
 
@@ -68,7 +68,7 @@ fn the_table_shows_the_change() {
         .clone();
     let text = String::from_utf8_lossy(&out);
 
-    assert!(text.contains("+2.0 kB"), "table was:\n{text}");
+    assert!(text.contains("+8.2 MB"), "table was:\n{text}");
 }
 
 #[test]
@@ -114,7 +114,10 @@ fn a_cleanup_records_a_snapshot_after_it_finishes() {
     let after = sb.json(&["scan"]);
 
     assert_eq!(snapshot_count(&sb), 3);
-    assert_eq!(reclaimable(&after, "npm-cache").unwrap()["change_bytes"], 0);
+    assert_eq!(
+        reclaimable(&after, "npm-cache").unwrap()["change_bytes"],
+        blocks(0)
+    );
 }
 
 #[test]
@@ -288,7 +291,7 @@ fn a_reclaimable_gone_since_the_last_snapshot_is_reported_once() {
         .clone();
     let text = String::from_utf8_lossy(&out);
     assert!(text.contains("npm cache"), "table was:\n{text}");
-    assert!(text.contains("-5.0 kB"), "table was:\n{text}");
+    assert!(text.contains("-20.5 MB"), "table was:\n{text}");
 
     let later = sb.json(&["scan"]);
     assert_eq!(later["gone"].as_array().unwrap().len(), 0);
@@ -306,7 +309,7 @@ fn the_json_lists_what_is_gone_with_its_last_size() {
     let gone = scan["gone"].as_array().unwrap();
     assert_eq!(gone.len(), 1);
     assert_eq!(gone[0]["id"], "npm-cache");
-    assert_eq!(gone[0]["previous_bytes"], 5000);
+    assert_eq!(gone[0]["previous_bytes"], blocks(5000));
 }
 
 #[test]
@@ -324,7 +327,7 @@ fn a_tool_cache_that_moved_keeps_its_history() {
 
     assert_eq!(
         reclaimable(&scan, "npm-cache").unwrap()["change_bytes"],
-        400
+        blocks(400)
     );
     assert_eq!(scan["gone"].as_array().unwrap().len(), 0);
 }
@@ -349,4 +352,63 @@ fn without_localappdata_snapshots_go_to_its_default_location() {
             .join("clch.db")
             .is_file()
     );
+}
+
+#[test]
+fn a_store_from_before_disks_were_recorded_is_upgraded_and_compared() {
+    let sb = Sandbox::new();
+    npm_cache_with(&sb, 3);
+    std::fs::create_dir_all(sb.data_dir()).unwrap();
+    let db = rusqlite::Connection::open(sb.data_dir().join("clch.db")).unwrap();
+    db.execute_batch(
+        "CREATE TABLE snapshot (id INTEGER PRIMARY KEY AUTOINCREMENT, taken_at_ms INTEGER NOT NULL);
+         CREATE TABLE reclaimable_size (
+             snapshot_id INTEGER NOT NULL REFERENCES snapshot(id),
+             reclaimable_id TEXT NOT NULL,
+             kind TEXT NOT NULL,
+             path TEXT NOT NULL,
+             size_bytes INTEGER NOT NULL,
+             PRIMARY KEY (snapshot_id, reclaimable_id, path));
+         INSERT INTO snapshot (taken_at_ms) VALUES (1);
+         INSERT INTO reclaimable_size VALUES (1, 'npm-cache', 'tool-cache', 'x', 4096);
+         PRAGMA user_version = 1;",
+    )
+    .unwrap();
+    drop(db);
+
+    let scan = sb.json(&["scan"]);
+
+    let npm = reclaimable(&scan, "npm-cache").unwrap();
+    assert_eq!(npm["change_state"], "unknown", "{npm}");
+    assert!(npm["change_bytes"].is_null(), "{npm}");
+    assert_eq!(snapshot_count(&sb), 2);
+
+    let next = sb.json(&["scan"]);
+    assert_eq!(
+        reclaimable(&next, "npm-cache").unwrap()["change_state"],
+        "known"
+    );
+    assert_eq!(snapshot_count(&sb), 3);
+}
+
+#[test]
+fn a_snapshot_keeps_each_disks_totals() {
+    let sb = Sandbox::new();
+    npm_cache_with(&sb, 3);
+
+    let scan = sb.json(&["scan"]);
+
+    let disk = &scan["disks"][0];
+    let db = rusqlite::Connection::open(sb.data_dir().join("clch.db")).unwrap();
+    let (name, free, reclaimable, complete): (String, Option<i64>, i64, bool) = db
+        .query_row(
+            "SELECT disk, free_bytes, reclaimable_bytes, complete FROM disk_total",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .unwrap();
+    assert_eq!(name, disk["disk"].as_str().unwrap());
+    assert_eq!(free, disk["free_bytes"].as_i64());
+    assert_eq!(reclaimable, blocks(3));
+    assert!(complete);
 }

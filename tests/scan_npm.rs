@@ -1,6 +1,6 @@
 mod common;
 
-use common::{Sandbox, reclaimable};
+use common::{Sandbox, blocks, reclaimable};
 use std::path::Path;
 
 fn same_path(reported: &serde_json::Value, expected: &Path) -> bool {
@@ -19,7 +19,7 @@ fn finds_the_npm_cache_at_the_default_location_when_npm_is_absent() {
 
     let npm = reclaimable(&scan, "npm-cache").expect("npm cache listed");
     assert_eq!(npm["kind"], "tool-cache");
-    assert_eq!(npm["size_bytes"], 1234);
+    assert_eq!(npm["size_bytes"], blocks(1234));
     assert!(same_path(&npm["path"], &cache), "path was {}", npm["path"]);
 }
 
@@ -34,7 +34,7 @@ fn follows_the_cache_location_npm_reports() {
     let scan = sb.json(&["scan"]);
 
     let npm = reclaimable(&scan, "npm-cache").expect("npm cache listed");
-    assert_eq!(npm["size_bytes"], 500);
+    assert_eq!(npm["size_bytes"], blocks(500));
     assert!(
         same_path(&npm["path"], &custom.join("_cacache")),
         "path was {}",
@@ -53,7 +53,7 @@ fn lists_the_npx_cache_as_its_own_reclaimable() {
 
     let npx = reclaimable(&scan, "npx-cache").expect("npx cache listed");
     assert_eq!(npx["kind"], "tool-cache");
-    assert_eq!(npx["size_bytes"], 700);
+    assert_eq!(npx["size_bytes"], blocks(700));
     assert!(
         same_path(&npx["path"], &root.join("_npx")),
         "path was {}",
@@ -61,7 +61,7 @@ fn lists_the_npx_cache_as_its_own_reclaimable() {
     );
     assert_eq!(
         reclaimable(&scan, "npm-cache").expect("npm cache listed")["size_bytes"],
-        10
+        blocks(10)
     );
 }
 
@@ -87,7 +87,7 @@ fn a_machine_without_npm_caches_scans_cleanly() {
 fn the_table_shows_what_the_json_carries() {
     let sb = Sandbox::new();
     let cache = sb.default_npm_cache().join("_cacache");
-    sb.write_file(&cache.join("content-v2/a"), 1_500_000);
+    sb.write_file(&cache.join("content-v2/a"), 366);
 
     let out = sb
         .clch()
@@ -140,7 +140,7 @@ fn npm_is_asked_from_home_so_a_project_npmrc_does_not_redirect_it() {
     let scan: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
 
     let npm = reclaimable(&scan, "npm-cache").expect("npm cache listed");
-    assert_eq!(npm["size_bytes"], 40);
+    assert_eq!(npm["size_bytes"], blocks(40));
 }
 
 #[test]
@@ -175,7 +175,7 @@ fn the_npx_cache_follows_the_location_npm_reports() {
 
     assert_eq!(
         reclaimable(&scan, "npx-cache").expect("npx listed")["size_bytes"],
-        321
+        blocks(321)
     );
 }
 
@@ -193,7 +193,7 @@ fn a_failing_npm_falls_back_to_the_default_location() {
 
     assert_eq!(
         reclaimable(&scan, "npm-cache").expect("npm listed")["size_bytes"],
-        77
+        blocks(77)
     );
 }
 
@@ -211,7 +211,7 @@ fn npm_output_that_is_not_one_line_falls_back_to_the_default_location() {
 
     assert_eq!(
         reclaimable(&scan, "npm-cache").expect("npm listed")["size_bytes"],
-        66
+        blocks(66)
     );
 }
 
@@ -231,7 +231,7 @@ fn a_hung_npm_is_abandoned_and_the_default_location_used() {
     );
     assert_eq!(
         reclaimable(&scan, "npm-cache").expect("npm listed")["size_bytes"],
-        55
+        blocks(55)
     );
 }
 
@@ -251,7 +251,7 @@ fn without_localappdata_npm_defaults_to_the_home_folder_on_windows() {
     let scan: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
 
     let npm = reclaimable(&scan, "npm-cache").expect("npm listed");
-    assert_eq!(npm["size_bytes"], 88);
+    assert_eq!(npm["size_bytes"], blocks(88));
     assert!(same_path(&npm["path"], &cache), "path was {}", npm["path"]);
 }
 
@@ -268,7 +268,7 @@ fn a_cache_folder_that_is_a_symlink_is_sized_by_what_it_points_to() {
 
     assert_eq!(
         reclaimable(&scan, "npm-cache").expect("npm listed")["size_bytes"],
-        444
+        blocks(444)
     );
 }
 

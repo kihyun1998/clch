@@ -1,11 +1,12 @@
 //! Cleaning: a plan built from a scan, and carrying it out.
 
+use std::collections::BTreeSet;
+
 use serde::Serialize;
 
 use crate::catalog::{self, ToolCacheKind};
 use crate::env::Env;
-use crate::scan::{Reclaimable, Scan};
-use crate::size;
+use crate::scan::{self, Reclaimable, Scan};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -27,6 +28,9 @@ pub struct PlanEntry {
     /// a full cleanup, the reclaimable's size.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expected_bytes: Option<u64>,
+    /// False when part of the reclaimable could not be read, making
+    /// `expected_bytes` a lower bound.
+    pub complete: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     #[serde(skip)]
@@ -56,7 +60,12 @@ pub struct CleanResult {
     pub id: String,
     pub name: String,
     pub status: Status,
+    /// How much this reclaimable shrank. A file another reclaimable also holds
+    /// counts here though it stays on disk; `DiskFreed` and `Outcome` do not
+    /// count it.
     pub freed_bytes: u64,
+    /// False when a measurement behind `freed_bytes` was a lower bound.
+    pub complete: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub action: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -69,7 +78,19 @@ pub struct CleanResult {
 pub struct Outcome {
     pub level: Level,
     pub results: Vec<CleanResult>,
+    pub disks: Vec<DiskFreed>,
     pub freed_bytes: u64,
+    /// False when a measurement behind `freed_bytes` was a lower bound.
+    pub complete: bool,
+}
+
+/// What a cleanup freed on one disk.
+#[derive(Debug, Serialize)]
+pub struct DiskFreed {
+    pub disk: String,
+    pub freed_bytes: u64,
+    /// False when a measurement behind `freed_bytes` was a lower bound.
+    pub complete: bool,
 }
 
 impl Outcome {
@@ -168,6 +189,7 @@ fn entry(env: &Env, r: &Reclaimable, level: Level) -> PlanEntry {
         cleanable: true,
         action: Some(format!("{} {}", cleanup.tool, args.join(" "))),
         expected_bytes,
+        complete: r.complete,
         reason: None,
         command: Some((cleanup.tool, args)),
         path: Some(r.path.clone()),
@@ -181,6 +203,7 @@ fn not_cleanable(id: &str, name: &str, reason: String) -> PlanEntry {
         cleanable: false,
         action: None,
         expected_bytes: None,
+        complete: true,
         reason: Some(reason),
         command: None,
         path: None,
@@ -216,47 +239,95 @@ fn version_at_least(have: &str, min: &str) -> bool {
     true
 }
 
-/// Carries out every cleanable entry of `plan`, each independently.
-pub fn execute(env: &Env, plan: Plan) -> Outcome {
-    let results: Vec<CleanResult> = plan
+/// Carries out every cleanable entry of `plan`, each independently, and
+/// measures the result against `before`, the scan the plan was built from. The
+/// scan taken afterwards is returned as well.
+pub fn execute(env: &Env, plan: Plan, before: &Scan) -> (Outcome, Scan) {
+    let attempted: Vec<_> = plan
         .plan
         .into_iter()
         .map(|entry| {
-            let (Some((tool, args)), Some(path)) = (entry.command, entry.path) else {
-                return CleanResult {
-                    id: entry.id,
-                    name: entry.name,
-                    status: Status::Skipped,
-                    freed_bytes: 0,
-                    action: None,
-                    reason: entry.reason,
-                    output: None,
-                };
-            };
-            let before = size::of_dir(&path);
-            let run = env.run_to_completion(tool, args);
-            let freed_bytes = before.saturating_sub(size::of_dir(&path));
-            CleanResult {
-                id: entry.id,
-                name: entry.name,
-                status: if run.is_ok() {
-                    Status::Cleaned
-                } else {
-                    Status::Failed
-                },
-                freed_bytes,
-                action: entry.action,
-                reason: None,
-                output: run.err(),
+            let run = entry
+                .command
+                .map(|(tool, args)| env.run_to_completion(tool, args));
+            (entry, run)
+        })
+        .collect();
+    let after = scan::run(env);
+
+    let cleaned_disks: BTreeSet<&str> = attempted
+        .iter()
+        .filter(|(_, run)| run.is_some())
+        .filter_map(|(entry, _)| reclaimable_at(before, entry)?.disk.as_deref())
+        .collect();
+    let disks: Vec<DiskFreed> = before
+        .disks
+        .iter()
+        .filter(|d| cleaned_disks.contains(d.disk.as_str()))
+        .map(|d| {
+            let later = after.disks.iter().find(|a| a.disk == d.disk);
+            DiskFreed {
+                disk: d.disk.clone(),
+                freed_bytes: d
+                    .reclaimable_bytes
+                    .saturating_sub(later.map_or(0, |a| a.reclaimable_bytes)),
+                complete: d.complete && later.is_none_or(|a| a.complete),
             }
         })
         .collect();
-    let freed_bytes = results.iter().map(|r| r.freed_bytes).sum();
-    Outcome {
+
+    let results = attempted
+        .into_iter()
+        .map(|(entry, run)| {
+            let was = reclaimable_at(before, &entry);
+            let now = was.and_then(|w| {
+                after
+                    .reclaimables
+                    .iter()
+                    .find(|a| a.id == w.id && a.path == w.path)
+            });
+            let attempted = run.is_some();
+            let freed_bytes = match was {
+                Some(was) if attempted => was
+                    .size_bytes
+                    .saturating_sub(now.map_or(0, |n| n.size_bytes)),
+                _ => 0,
+            };
+            CleanResult {
+                id: entry.id,
+                name: entry.name,
+                status: match &run {
+                    None => Status::Skipped,
+                    Some(Ok(())) => Status::Cleaned,
+                    Some(Err(_)) => Status::Failed,
+                },
+                freed_bytes,
+                complete: !attempted
+                    || (was.is_none_or(|w| w.complete) && now.is_none_or(|n| n.complete)),
+                action: entry.action,
+                reason: entry.reason,
+                output: run.and_then(Result::err),
+            }
+        })
+        .collect();
+
+    let freed_bytes = disks.iter().map(|d| d.freed_bytes).sum();
+    let complete = disks.iter().all(|d| d.complete);
+    let outcome = Outcome {
         level: plan.level,
         results,
+        disks,
         freed_bytes,
-    }
+        complete,
+    };
+    (outcome, after)
+}
+
+fn reclaimable_at<'a>(scan: &'a Scan, entry: &PlanEntry) -> Option<&'a Reclaimable> {
+    let path = entry.path.as_ref()?;
+    scan.reclaimables
+        .iter()
+        .find(|r| r.id == entry.id && &r.path == path)
 }
 
 #[cfg(test)]

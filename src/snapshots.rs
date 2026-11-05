@@ -10,12 +10,12 @@ use serde::Serialize;
 
 use crate::catalog::Kind;
 use crate::env::Env;
-use crate::scan::Scan;
+use crate::scan::{ChangeState, Scan};
 
 /// How long a store operation waits for another clch run.
 const BUSY_WAIT: Duration = Duration::from_secs(10);
 
-const SCHEMA_VERSION: u32 = 1;
+const SCHEMA_VERSION: u32 = 2;
 
 const SCHEMA_V1: &str = "
 CREATE TABLE snapshot (
@@ -32,6 +32,20 @@ CREATE TABLE reclaimable_size (
 );
 ";
 
+const SCHEMA_V2: &str = "
+ALTER TABLE reclaimable_size ADD COLUMN disk TEXT;
+ALTER TABLE reclaimable_size ADD COLUMN complete INTEGER NOT NULL DEFAULT 1;
+UPDATE reclaimable_size SET complete = 0;
+CREATE TABLE disk_total (
+    snapshot_id INTEGER NOT NULL REFERENCES snapshot(id),
+    disk TEXT NOT NULL,
+    free_bytes INTEGER,
+    reclaimable_bytes INTEGER NOT NULL,
+    complete INTEGER NOT NULL,
+    PRIMARY KEY (snapshot_id, disk)
+);
+";
+
 /// A reclaimable that the latest snapshot had and a new scan did not find.
 #[derive(Debug, Serialize)]
 pub struct Gone {
@@ -39,6 +53,8 @@ pub struct Gone {
     pub kind: Kind,
     pub path: PathBuf,
     pub previous_bytes: u64,
+    /// False when `previous_bytes` was a lower bound.
+    pub complete: bool,
 }
 
 #[derive(Debug)]
@@ -108,7 +124,7 @@ impl Store {
     /// lists what that snapshot had and `scan` did not find.
     pub fn compare(&self, scan: &mut Scan) -> Result<(), StoreError> {
         let mut stmt = self.conn.prepare(
-            "SELECT reclaimable_id, kind, path, size_bytes FROM reclaimable_size
+            "SELECT reclaimable_id, kind, path, size_bytes, complete FROM reclaimable_size
              WHERE snapshot_id = (SELECT max(id) FROM snapshot)",
         )?;
         let mut previous: HashMap<(String, Option<String>), Gone> = stmt
@@ -124,23 +140,28 @@ impl Store {
                 let path: String = row.get(2)?;
                 let key = identity(kind, &id, &path);
                 let previous_bytes = row.get::<_, i64>(3)? as u64;
+                let complete: bool = row.get(4)?;
                 let path = PathBuf::from(path);
-                Ok((
-                    key,
-                    Gone {
-                        id,
-                        kind,
-                        path,
-                        previous_bytes,
-                    },
-                ))
+                let gone = Gone {
+                    id,
+                    kind,
+                    path,
+                    previous_bytes,
+                    complete,
+                };
+                Ok((key, gone))
             })?
             .collect::<rusqlite::Result<_>>()?;
         for r in &mut scan.reclaimables {
             let key = identity(r.kind, &r.id, &r.path.display().to_string());
-            r.change_bytes = previous
-                .remove(&key)
-                .map(|before| r.size_bytes as i64 - before.previous_bytes as i64);
+            match previous.remove(&key) {
+                None => r.change_state = ChangeState::New,
+                Some(before) if before.complete && r.complete => {
+                    r.change_state = ChangeState::Known;
+                    r.change_bytes = Some(r.size_bytes as i64 - before.previous_bytes as i64);
+                }
+                Some(_) => r.change_state = ChangeState::Unknown,
+            }
         }
         scan.gone = previous.into_values().collect();
         scan.gone
@@ -161,8 +182,9 @@ impl Store {
         let snapshot_id = tx.last_insert_rowid();
         {
             let mut insert = tx.prepare(
-                "INSERT INTO reclaimable_size (snapshot_id, reclaimable_id, kind, path, size_bytes)
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                "INSERT INTO reclaimable_size
+                    (snapshot_id, reclaimable_id, kind, path, size_bytes, disk, complete)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             )?;
             for r in &scan.reclaimables {
                 insert.execute(params![
@@ -170,7 +192,23 @@ impl Store {
                     r.id,
                     r.kind.as_str(),
                     r.path.display().to_string(),
-                    r.size_bytes as i64
+                    r.size_bytes as i64,
+                    r.disk,
+                    r.complete
+                ])?;
+            }
+            let mut insert = tx.prepare(
+                "INSERT INTO disk_total
+                    (snapshot_id, disk, free_bytes, reclaimable_bytes, complete)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+            )?;
+            for d in &scan.disks {
+                insert.execute(params![
+                    snapshot_id,
+                    d.disk,
+                    d.free_bytes.map(|b| b as i64),
+                    d.reclaimable_bytes as i64,
+                    d.complete
                 ])?;
             }
         }
@@ -206,6 +244,9 @@ fn migrate(conn: &mut Connection) -> Result<(), Migration> {
     }
     if version < 1 {
         tx.execute_batch(SCHEMA_V1)?;
+    }
+    if version < 2 {
+        tx.execute_batch(SCHEMA_V2)?;
     }
     tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     tx.commit()?;

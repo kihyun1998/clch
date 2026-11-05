@@ -2,6 +2,7 @@
 
 pub mod catalog;
 pub mod clean;
+pub mod disks;
 pub mod env;
 pub mod output;
 pub mod process;

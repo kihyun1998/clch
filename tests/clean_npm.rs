@@ -1,6 +1,6 @@
 mod common;
 
-use common::Sandbox;
+use common::{Sandbox, blocks};
 use std::path::{Path, PathBuf};
 
 /// What a fake npm does for one command line.
@@ -171,8 +171,14 @@ fn the_plan_states_level_action_and_space_as_json() {
     assert!(npm.get("up_to_bytes").is_none(), "{npm}");
 
     let full = m.sb.json(&["clean", "--full"]);
-    assert_eq!(entry(&full["plan"], "npm-cache")["expected_bytes"], 1200);
-    assert_eq!(entry(&full["plan"], "npx-cache")["expected_bytes"], 300);
+    assert_eq!(
+        entry(&full["plan"], "npm-cache")["expected_bytes"],
+        blocks(1200)
+    );
+    assert_eq!(
+        entry(&full["plan"], "npx-cache")["expected_bytes"],
+        blocks(300)
+    );
     assert!(m.cleanup_calls().is_empty());
 }
 
@@ -200,7 +206,10 @@ fn full_cleanup_runs_only_when_asked_for() {
 
     assert_eq!(m.cleanup_calls(), vec!["npm cache clean --force"]);
     assert!(!m.cacache().exists());
-    assert_eq!(entry(&result["results"], "npm-cache")["freed_bytes"], 1200);
+    assert_eq!(
+        entry(&result["results"], "npm-cache")["freed_bytes"],
+        blocks(1200)
+    );
 }
 
 #[test]
@@ -212,8 +221,8 @@ fn the_result_reports_the_space_actually_freed() {
 
     let npm = entry(&result["results"], "npm-cache");
     assert_eq!(npm["status"], "cleaned");
-    assert_eq!(npm["freed_bytes"], 200);
-    assert_eq!(result["freed_bytes"], 200);
+    assert_eq!(npm["freed_bytes"], blocks(200));
+    assert_eq!(result["freed_bytes"], blocks(200));
 }
 
 #[test]
@@ -313,7 +322,7 @@ fn the_text_result_lists_each_reclaimable_and_the_total() {
 
     assert!(text.contains("npm cache"), "result was:\n{text}");
     assert!(text.contains("npx cache"), "result was:\n{text}");
-    assert!(text.contains("1.5 kB"), "total missing:\n{text}");
+    assert!(text.contains("6.1 MB"), "total missing:\n{text}");
 }
 
 #[test]

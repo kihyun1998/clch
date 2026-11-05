@@ -83,13 +83,13 @@ fn main() -> ExitCode {
                 }
                 return ExitCode::SUCCESS;
             }
-            let outcome = clean::execute(&env, plan);
+            let (outcome, after) = clean::execute(&env, plan, &found);
             if json {
                 print_json(&outcome);
             } else {
                 print!("{}", output::outcome_table(&outcome));
             }
-            if let Err(e) = snapshots::record(&env, &scan::run(&env)) {
+            if let Err(e) = snapshots::record(&env, &after) {
                 eprintln!("warning: snapshot not recorded: {e}");
             }
             if outcome.any_failed() {

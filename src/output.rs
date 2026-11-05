@@ -2,7 +2,7 @@
 
 use crate::catalog::{self, Kind};
 use crate::clean::{Level, Outcome, Plan, Status};
-use crate::scan::Scan;
+use crate::scan::{ChangeState, Scan};
 
 /// A byte count in decimal units (kB, MB, GB).
 pub fn human_size(bytes: u64) -> String {
@@ -20,14 +20,32 @@ pub fn human_size(bytes: u64) -> String {
     }
 }
 
-/// A signed change in size, such as `+2.0 kB` or `-300 B`; `new` when there
-/// is nothing to compare with.
+/// A signed change in size, such as `+2.0 kB` or `-300 B`.
 pub fn human_change(change: Option<i64>) -> String {
     match change {
-        None => "new".to_string(),
+        None => "unknown".to_string(),
         Some(0) => "0 B".to_string(),
         Some(c) if c > 0 => format!("+{}", human_size(c as u64)),
         Some(c) => format!("-{}", human_size(c.unsigned_abs())),
+    }
+}
+
+/// A size, marked as a lower bound when part of it could not be read.
+fn bounded(bytes: u64, complete: bool) -> String {
+    if complete {
+        human_size(bytes)
+    } else {
+        format!("at least {}", human_size(bytes))
+    }
+}
+
+/// A freed size, marked as an estimate when a measurement behind it was a
+/// lower bound.
+fn estimated(bytes: u64, complete: bool) -> String {
+    if complete {
+        human_size(bytes)
+    } else {
+        format!("about {}", human_size(bytes))
     }
 }
 
@@ -39,6 +57,21 @@ fn kind_label(kind: Kind) -> &'static str {
 
 pub fn scan_table(scan: &Scan) -> String {
     let mut out = reclaimables_table(scan);
+    if !scan.disks.is_empty() {
+        let rows: Vec<[String; 3]> = scan
+            .disks
+            .iter()
+            .map(|d| {
+                [
+                    d.disk.clone(),
+                    d.free_bytes.map_or("unknown".to_string(), human_size),
+                    bounded(d.reclaimable_bytes, d.complete),
+                ]
+            })
+            .collect();
+        out.push('\n');
+        out.push_str(&table(["DISK", "FREE", "RECLAIMABLE"], &rows));
+    }
     if !scan.gone.is_empty() {
         out.push_str("\nGone since the last snapshot:\n");
         let rows: Vec<[String; 3]> = scan
@@ -48,7 +81,14 @@ pub fn scan_table(scan: &Scan) -> String {
                 let name = catalog::tool_cache(&g.id).map_or(g.id.as_str(), |k| k.name);
                 [
                     name.to_string(),
-                    human_change(Some(-(g.previous_bytes as i64))),
+                    if g.complete {
+                        human_change(Some(-(g.previous_bytes as i64)))
+                    } else {
+                        format!(
+                            "at least {}",
+                            human_change(Some(-(g.previous_bytes as i64)))
+                        )
+                    },
                     g.path.display().to_string(),
                 ]
             })
@@ -62,24 +102,25 @@ fn reclaimables_table(scan: &Scan) -> String {
     if scan.reclaimables.is_empty() {
         return "No reclaimables found.\n".to_string();
     }
-    let rows: Vec<[String; 5]> = scan
+    let rows: Vec<[String; 6]> = scan
         .reclaimables
         .iter()
         .map(|r| {
             [
                 kind_label(r.kind).to_string(),
                 r.name.clone(),
-                human_size(r.size_bytes),
-                if scan.history_available {
-                    human_change(r.change_bytes)
-                } else {
-                    "unknown".to_string()
+                bounded(r.size_bytes, r.complete),
+                match r.change_state {
+                    ChangeState::Known => human_change(r.change_bytes),
+                    ChangeState::New => "new".to_string(),
+                    ChangeState::Unknown => "unknown".to_string(),
                 },
+                r.disk.clone().unwrap_or_else(|| "unknown".to_string()),
                 r.path.display().to_string(),
             ]
         })
         .collect();
-    table(["KIND", "NAME", "SIZE", "CHANGE", "PATH"], &rows)
+    table(["KIND", "NAME", "SIZE", "CHANGE", "DISK", "PATH"], &rows)
 }
 
 fn level_label(level: Level) -> &'static str {
@@ -103,7 +144,7 @@ pub fn plan_table(plan: &Plan) -> String {
         .iter()
         .map(|e| {
             let space = match (e.expected_bytes, e.cleanable) {
-                (Some(b), _) => human_size(b),
+                (Some(b), _) => bounded(b, e.complete),
                 (None, true) => "known after cleaning".to_string(),
                 (None, false) => String::new(),
             };
@@ -130,13 +171,22 @@ pub fn outcome_table(outcome: &Outcome) -> String {
                 Status::Skipped => format!("skipped: {}", r.reason.as_deref().unwrap_or_default()),
                 Status::Failed => format!("failed: {}", r.output.as_deref().unwrap_or_default()),
             };
-            [r.name.clone(), result, human_size(r.freed_bytes)]
+            [r.name.clone(), result, estimated(r.freed_bytes, r.complete)]
         })
         .collect();
     let mut out = table(["NAME", "RESULT", "FREED"], &rows);
+    if !outcome.disks.is_empty() {
+        out.push('\n');
+        let rows: Vec<[String; 2]> = outcome
+            .disks
+            .iter()
+            .map(|d| [d.disk.clone(), estimated(d.freed_bytes, d.complete)])
+            .collect();
+        out.push_str(&table(["DISK", "FREED"], &rows));
+    }
     out.push_str(&format!(
         "\nFreed {} in total.\n",
-        human_size(outcome.freed_bytes)
+        estimated(outcome.freed_bytes, outcome.complete)
     ));
     out
 }
@@ -170,7 +220,7 @@ mod tests {
     #[test]
     fn changes_carry_their_sign() {
         use super::human_change;
-        assert_eq!(human_change(None), "new");
+        assert_eq!(human_change(None), "unknown");
         assert_eq!(human_change(Some(0)), "0 B");
         assert_eq!(human_change(Some(2000)), "+2.0 kB");
         assert_eq!(human_change(Some(-300)), "-300 B");

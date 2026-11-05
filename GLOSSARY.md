@@ -26,6 +26,10 @@ _Avoid_: manifest, indicator
 A folder the user names as the place to look for project artifacts; nothing outside the scan roots is searched for them.
 _Avoid_: search path, workspace
 
+**Disk**:
+A mounted volume, named by where it is mounted; the unit free space and reclaimable totals are counted on.
+_Avoid_: drive, volume
+
 ### Over time
 
 **Snapshot**:

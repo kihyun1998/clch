@@ -11,6 +11,14 @@ use std::path::{Path, PathBuf};
 use assert_cmd::Command;
 use tempfile::TempDir;
 
+/// The allocation unit of the filesystems the tests run on.
+pub const BLOCK: usize = 4096;
+
+/// The size in bytes of `count` blocks.
+pub fn blocks(count: i64) -> i64 {
+    count * BLOCK as i64
+}
+
 pub struct Sandbox {
     root: TempDir,
 }
@@ -68,10 +76,11 @@ impl Sandbox {
         }
     }
 
-    /// Writes `bytes` bytes into a new file at `path`, creating its parents.
-    pub fn write_file(&self, path: &Path, bytes: usize) {
+    /// Writes a new file of `count` filesystem blocks at `path`, creating its
+    /// parents. Its length and its allocated size are both `blocks(count)`.
+    pub fn write_file(&self, path: &Path, count: usize) {
         fs::create_dir_all(path.parent().expect("file has a parent")).expect("create parent");
-        fs::write(path, vec![b'x'; bytes]).expect("write file");
+        fs::write(path, vec![b'x'; count * BLOCK]).expect("write file");
     }
 
     /// The file every fake tool appends `<name> <args>` to when it runs.
