@@ -58,6 +58,9 @@ pub struct Located {
     /// home folder.
     pub run_from: Option<PathBuf>,
     pub size: LocatedSize,
+    /// True when its tool is on `PATH` and did not say where this is, so that
+    /// `path` is only where it should be by default.
+    pub assumed: bool,
 }
 
 /// Where the size of an instance of a tool cache comes from.
@@ -76,6 +79,23 @@ impl Located {
             path,
             run_from: None,
             size: LocatedSize::Measured,
+            assumed: false,
+        }
+    }
+
+    /// Where `tool` said it is, else its `default` location.
+    fn asked(
+        env: &Env,
+        tool: &str,
+        said: Option<PathBuf>,
+        default: Option<PathBuf>,
+    ) -> Option<Located> {
+        match said {
+            Some(path) => Some(Located::at(path)),
+            None => default.map(|path| Located {
+                assumed: env.find_tool(tool).is_some(),
+                ..Located::at(path)
+            }),
         }
     }
 }
@@ -523,37 +543,40 @@ mod npm {
     use super::*;
 
     /// npm's `cache` setting: what npm reports, else npm's own default
-    /// (`%LOCALAPPDATA%\npm-cache` on Windows, falling back to
-    /// `~\npm-cache`; `~/.npm` elsewhere).
-    fn cache_root(env: &Env) -> Option<PathBuf> {
-        if let Some(reported) = env.tool_path(
+    /// (`%LOCALAPPDATA%\\npm-cache` on Windows, falling back to
+    /// `~\\npm-cache`; `~/.npm` elsewhere).
+    fn cache_root(env: &Env) -> Option<Located> {
+        let said = env.tool_path(
             "npm",
             &["config", "get", "cache"],
             env.home().map(PathBuf::as_path),
-        ) {
-            return Some(reported);
-        }
-        if cfg!(windows) {
+        );
+        let default = if cfg!(windows) {
             env.local_app_data()
                 .or(env.home())
                 .map(|d| d.join("npm-cache"))
         } else {
             env.home().map(|h| h.join(".npm"))
-        }
+        };
+        Located::asked(env, "npm", said, default)
+    }
+
+    fn inside(env: &Env, folder: &str) -> Vec<Located> {
+        cache_root(env)
+            .map(|root| Located {
+                path: root.path.join(folder),
+                ..root
+            })
+            .into_iter()
+            .collect()
     }
 
     pub fn cache(env: &Env, _roots: &[PathBuf]) -> Vec<Located> {
-        cache_root(env)
-            .map(|root| Located::at(root.join("_cacache")))
-            .into_iter()
-            .collect()
+        inside(env, "_cacache")
     }
 
     pub fn npx_cache(env: &Env, _roots: &[PathBuf]) -> Vec<Located> {
-        cache_root(env)
-            .map(|root| Located::at(root.join("_npx")))
-            .into_iter()
-            .collect()
+        inside(env, "_npx")
     }
 }
 
@@ -565,12 +588,10 @@ mod pnpm {
     /// on, it is `.pnpm-store` at the disk's root, and pnpm is asked and run from
     /// inside it: a project's folder may hold code and settings pnpm would act on.
     pub fn stores(env: &Env, roots: &[PathBuf]) -> Vec<Located> {
-        let reported = env
+        let said = env
             .tool_path("pnpm", &["store", "path"], env.home().map(PathBuf::as_path))
             .map(|store| store_folder(&store));
-        let mut stores: Vec<Located> = reported
-            .or_else(|| default_store(env))
-            .map(Located::at)
+        let mut stores: Vec<Located> = Located::asked(env, "pnpm", said, default_store(env))
             .into_iter()
             .collect();
         for root in roots {
@@ -583,6 +604,7 @@ mod pnpm {
                     run_from: Some(store.clone()),
                     path: store,
                     size: LocatedSize::Measured,
+                    assumed: false,
                 });
             }
         }
@@ -637,31 +659,42 @@ fn one(path: Option<PathBuf>) -> Vec<Located> {
     path.map(Located::at).into_iter().collect()
 }
 
+/// What `tool args` reports, else `default`.
+fn asked(
+    env: &Env,
+    tool: &str,
+    args: &[&str],
+    default: impl FnOnce() -> Option<PathBuf>,
+) -> Vec<Located> {
+    Located::asked(env, tool, reported(env, tool, args), default())
+        .into_iter()
+        .collect()
+}
+
 mod python {
     use super::*;
 
     pub fn pip(env: &Env, _roots: &[PathBuf]) -> Vec<Located> {
         let pip = ["pip", "pip3"]
             .into_iter()
-            .find(|t| env.find_tool(t).is_some());
-        one(pip
-            .and_then(|pip| reported(env, pip, &["cache", "dir"]))
-            .or_else(|| {
-                if let Some(dir) = env.var("PIP_CACHE_DIR") {
-                    return Some(PathBuf::from(dir));
-                }
-                if cfg!(windows) {
-                    return Some(local_app_data(env)?.join("pip").join("Cache"));
-                }
-                if let Some(cache) = env.var("XDG_CACHE_HOME") {
-                    return Some(PathBuf::from(cache).join("pip"));
-                }
-                Some(env.home()?.join("Library").join("Caches").join("pip"))
-            }))
+            .find(|t| env.find_tool(t).is_some())
+            .unwrap_or("pip");
+        asked(env, pip, &["cache", "dir"], || {
+            if let Some(dir) = env.var("PIP_CACHE_DIR") {
+                return Some(PathBuf::from(dir));
+            }
+            if cfg!(windows) {
+                return Some(local_app_data(env)?.join("pip").join("Cache"));
+            }
+            if let Some(cache) = env.var("XDG_CACHE_HOME") {
+                return Some(PathBuf::from(cache).join("pip"));
+            }
+            Some(env.home()?.join("Library").join("Caches").join("pip"))
+        })
     }
 
     pub fn uv(env: &Env, _roots: &[PathBuf]) -> Vec<Located> {
-        one(reported(env, "uv", &["cache", "dir"]).or_else(|| {
+        asked(env, "uv", &["cache", "dir"], || {
             if let Some(dir) = env.var("UV_CACHE_DIR") {
                 return Some(PathBuf::from(dir));
             }
@@ -672,7 +705,7 @@ mod python {
                 return Some(PathBuf::from(cache).join("uv"));
             }
             Some(env.home()?.join(".cache").join("uv"))
-        }))
+        })
     }
 }
 
@@ -701,7 +734,7 @@ mod go {
     use super::*;
 
     pub fn build(env: &Env, _roots: &[PathBuf]) -> Vec<Located> {
-        one(reported(env, "go", &["env", "GOCACHE"]).or_else(|| {
+        asked(env, "go", &["env", "GOCACHE"], || {
             if let Some(dir) = env.var("GOCACHE") {
                 return Some(PathBuf::from(dir));
             }
@@ -709,11 +742,11 @@ mod go {
                 return Some(local_app_data(env)?.join("go-build"));
             }
             Some(env.home()?.join("Library").join("Caches").join("go-build"))
-        }))
+        })
     }
 
     pub fn modules(env: &Env, _roots: &[PathBuf]) -> Vec<Located> {
-        one(reported(env, "go", &["env", "GOMODCACHE"]).or_else(|| {
+        asked(env, "go", &["env", "GOMODCACHE"], || {
             if let Some(dir) = env.var("GOMODCACHE") {
                 return Some(PathBuf::from(dir));
             }
@@ -722,7 +755,7 @@ mod go {
                 .and_then(|list| std::env::split_paths(&list).next())
                 .or_else(|| Some(env.home()?.join("go")))?;
             Some(gopath.join("pkg").join("mod"))
-        }))
+        })
     }
 }
 
@@ -757,12 +790,12 @@ mod macos {
         if !cfg!(target_os = "macos") {
             return Vec::new();
         }
-        one(reported(env, "brew", &["--cache"]).or_else(|| {
+        asked(env, "brew", &["--cache"], || {
             if let Some(dir) = env.var("HOMEBREW_CACHE") {
                 return Some(PathBuf::from(dir));
             }
             Some(env.home()?.join("Library/Caches/Homebrew"))
-        }))
+        })
     }
 
     /// Where Xcode's settings put derived data, else its default.
@@ -842,6 +875,7 @@ With Docker Desktop on WSL 2, Docker's data lives in a virtual disk, which may n
             path: folder.unwrap_or_else(|| PathBuf::from(NO_FOLDER)),
             run_from: None,
             size,
+            assumed: false,
         }]
     }
 
@@ -957,34 +991,49 @@ mod yarn {
         Some(major < 2)
     }
 
+    /// Where yarn said this is, else `default`, which counts as assumed only
+    /// when this kind's yarn is what was asked.
+    fn answered_if(
+        env: &Env,
+        ours: bool,
+        said: Option<PathBuf>,
+        default: Option<PathBuf>,
+    ) -> Vec<Located> {
+        match (said, ours) {
+            (None, false) => one(default),
+            (said, _) => Located::asked(env, "yarn", said, default)
+                .into_iter()
+                .collect(),
+        }
+    }
+
     /// What Classic reports when it is the yarn on `PATH`, else its default.
     pub fn classic(env: &Env, _roots: &[PathBuf]) -> Vec<Located> {
-        let reported = (is_classic(env) == Some(true))
+        let classic = is_classic(env);
+        let said = (classic == Some(true))
             .then(|| env.tool_path("yarn", &["cache", "dir"], env.home().map(PathBuf::as_path)))
             .flatten();
-        reported
-            .or_else(|| {
-                let root = if cfg!(windows) {
-                    env.local_app_data()
-                        .cloned()
-                        .or_else(|| env.home().map(|h| h.join("AppData").join("Local")))?
-                        .join("Yarn")
-                        .join("Cache")
-                } else if let Some(cache) = env.var("XDG_CACHE_HOME") {
-                    PathBuf::from(cache).join("yarn")
-                } else {
-                    env.home()?.join("Library").join("Caches").join("Yarn")
-                };
-                Some(root.join("v6"))
-            })
-            .map(Located::at)
-            .into_iter()
-            .collect()
+        let default = || {
+            let root = if cfg!(windows) {
+                env.local_app_data()
+                    .cloned()
+                    .or_else(|| env.home().map(|h| h.join("AppData").join("Local")))?
+                    .join("Yarn")
+                    .join("Cache")
+            } else if let Some(cache) = env.var("XDG_CACHE_HOME") {
+                PathBuf::from(cache).join("yarn")
+            } else {
+                env.home()?.join("Library").join("Caches").join("Yarn")
+            };
+            Some(root.join("v6"))
+        };
+        answered_if(env, classic != Some(false), said, default())
     }
 
     /// What Berry reports when it is the yarn on `PATH`, else its default.
     pub fn berry(env: &Env, _roots: &[PathBuf]) -> Vec<Located> {
-        let reported = (is_classic(env) == Some(false))
+        let classic = is_classic(env);
+        let said = (classic == Some(false))
             .then(|| {
                 env.tool_path(
                     "yarn",
@@ -993,23 +1042,20 @@ mod yarn {
                 )
             })
             .flatten();
-        reported
-            .or_else(|| {
-                let global = if cfg!(windows) {
-                    env.local_app_data()
-                        .cloned()
-                        .or_else(|| env.home().map(|h| h.join("AppData").join("Local")))?
-                        .join("Yarn")
-                        .join("Berry")
-                } else if let Some(data) = env.var("XDG_DATA_HOME") {
-                    PathBuf::from(data).join("yarn").join("berry")
-                } else {
-                    env.home()?.join(".yarn").join("berry")
-                };
-                Some(global.join("cache"))
-            })
-            .map(Located::at)
-            .into_iter()
-            .collect()
+        let default = || {
+            let global = if cfg!(windows) {
+                env.local_app_data()
+                    .cloned()
+                    .or_else(|| env.home().map(|h| h.join("AppData").join("Local")))?
+                    .join("Yarn")
+                    .join("Berry")
+            } else if let Some(data) = env.var("XDG_DATA_HOME") {
+                PathBuf::from(data).join("yarn").join("berry")
+            } else {
+                env.home()?.join(".yarn").join("berry")
+            };
+            Some(global.join("cache"))
+        };
+        answered_if(env, classic != Some(true), said, default())
     }
 }

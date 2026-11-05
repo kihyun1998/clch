@@ -357,6 +357,14 @@ fn entry(env: &Env, r: &Reclaimable, level: Level) -> PlanEntry {
         };
         return not_cleanable(kind.id, kind.name, reason);
     };
+    if r.location_assumed {
+        let reason =
+            format!("{tool} did not say where this is, so its cleanup might act on another folder");
+        return PlanEntry {
+            path: Some(r.path.clone()),
+            ..not_cleanable(kind.id, kind.name, reason)
+        };
+    }
     if let Some(below) = cleanup.below_version {
         let version = env.tool_value(tool, &["--version"]);
         if version

@@ -4,7 +4,7 @@ A kind is an entry in `src/catalog.rs`; scan, clean, snapshots and output pick i
 
 ## A tool cache
 
-- **Ask the tool where its cache is, from the home folder**, through `Env::tool_path`, which believes only an absolute path. Fall back to the tool's documented default, read from its source or docs, including the environment variables it honours. See [Native cleanup](native-cleanup.md).
+- **Ask the tool where its cache is, from the home folder**, through `Env::tool_path`, which believes only an absolute path. Fall back to the tool's documented default, read from its source or docs, including the environment variables it honours, through `asked`, which records that the tool did not say. See [Native cleanup](native-cleanup.md).
 - **Never run a tool inside a project or scan root.** A project's folder can hold code and settings the tool acts on. `Located::run_from` is for a folder that holds none, such as `.pnpm-store`.
 - **A scan must not make a tool download anything.** Set what stops it in `settings_for` in `src/env.rs`, as `GOTOOLCHAIN=local` does for go and `COREPACK_ENABLE_NETWORK=0` for corepack's shims. Check with a pinned version in the home folder.
 - **Map each cleanup level to the tool's own command, or to none**, and confirm against the real CLI, with a file placed to see what goes: yarn's docs and its behaviour differ. Record why in the note.

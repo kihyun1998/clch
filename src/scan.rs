@@ -22,6 +22,9 @@ pub struct Reclaimable {
     /// The folder its tool must run in to act on it, when not the home folder.
     #[serde(skip)]
     pub run_from: Option<PathBuf>,
+    /// True when its tool did not say where this is.
+    #[serde(skip)]
+    pub location_assumed: bool,
     pub size_bytes: u64,
     /// False when part of it could not be read, making `size_bytes` a lower
     /// bound.
@@ -80,6 +83,15 @@ fn add_to_total(
     });
     total.reclaimable_bytes += measured.unique_bytes;
     total.complete &= measured.complete;
+}
+
+/// What a scan knows of a reclaimable before measuring it.
+#[derive(Default)]
+struct Source {
+    run_from: Option<PathBuf>,
+    /// Its size as its tool reports it, instead of measuring.
+    reported: Option<u64>,
+    location_assumed: bool,
 }
 
 /// Which scan roots a scan searches for project artifacts.
@@ -174,12 +186,12 @@ pub fn run(env: &Env, scope: &Scope) -> Scan {
     let mut totals: BTreeMap<String, DiskTotal> = BTreeMap::new();
     let mut reclaimables = Vec::new();
     let mut tool_notes: Vec<ToolNote> = Vec::new();
-    let mut add = |kind: Kind,
-                   id: &str,
-                   name: &str,
-                   path: PathBuf,
-                   run_from: Option<PathBuf>,
-                   reported: Option<u64>| {
+    let mut add = |kind: Kind, id: &str, name: &str, path: PathBuf, source: Source| {
+        let Source {
+            run_from,
+            reported,
+            location_assumed,
+        } = source;
         if reported.is_none() {
             env.progress_step(|| format!("Measuring {}", path.display()));
         }
@@ -218,6 +230,7 @@ pub fn run(env: &Env, scope: &Scope) -> Scan {
             change_state: ChangeState::Unknown,
             path,
             run_from,
+            location_assumed,
         });
     };
 
@@ -249,8 +262,11 @@ pub fn run(env: &Env, scope: &Scope) -> Scan {
                 kind.id,
                 kind.name,
                 located.path,
-                located.run_from,
-                reported,
+                Source {
+                    run_from: located.run_from,
+                    reported,
+                    location_assumed: located.assumed,
+                },
             );
         }
     }
@@ -261,8 +277,7 @@ pub fn run(env: &Env, scope: &Scope) -> Scan {
             artifact.kind.id,
             artifact.kind.name,
             artifact.path,
-            None,
-            None,
+            Source::default(),
         );
     }
     env.progress_done();
