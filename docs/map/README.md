@@ -6,3 +6,5 @@ The territory map. A comment's why, trap and measured value go to a note here. N
 - [Snapshot store](snapshot-store.md): how snapshots are kept, compared and made safe to write at the same time.
 - [Measuring reclaimables and disks](disk-measurement.md): what a size counts, and how a disk is named.
 - [Project artifacts](project-artifacts.md): what counts as one, where they are looked for, and what it takes to delete one.
+- [Adding a kind of reclaimable](adding-a-reclaimable.md): the rules a new tool cache or project artifact has to obey.
+- [Checking Windows from a Mac](checking-windows.md): type-checking the Windows code before pushing.
