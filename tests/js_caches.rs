@@ -616,7 +616,7 @@ fn fake_recording_network_setting(sb: &Sandbox, tool: &str) -> PathBuf {
     sb.fake_tool(
         tool,
         &format!("echo \"$COREPACK_ENABLE_NETWORK\" >> '{0}'", seen.display()),
-        &format!("echo %COREPACK_ENABLE_NETWORK%>>\"{0}\"", seen.display()),
+        &format!(">>\"{0}\" echo %COREPACK_ENABLE_NETWORK%", seen.display()),
     );
     seen
 }
