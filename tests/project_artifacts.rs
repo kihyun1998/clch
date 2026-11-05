@@ -1306,3 +1306,55 @@ fn asking_git_does_not_run_what_a_cloned_repositorys_config_names() {
     assert!(modules.exists());
     assert!(!ran.exists(), "git ran the repository's fsmonitor");
 }
+
+#[test]
+fn a_folder_ending_in_app_is_not_searched() {
+    let sb = Sandbox::new();
+    let root = sb.root().join("code");
+    let inside = sb.node_project(&root.join("Tool.app/Contents/Resources/app"), 2);
+    let outside = sb.node_project(&root.join("project"), 1);
+    let root = root.display().to_string();
+
+    let scan = sb.json(&["scan", "--root", &root]);
+
+    let paths: Vec<&str> = scan["reclaimables"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|r| r["id"] == "node_modules")
+        .map(|r| r["path"].as_str().unwrap())
+        .collect();
+    assert_eq!(paths, [outside.to_str().unwrap()]);
+    assert!(inside.exists());
+}
+
+#[test]
+fn a_folder_merely_containing_app_in_its_name_is_searched() {
+    let sb = Sandbox::new();
+    let root = sb.root().join("code");
+    sb.node_project(&root.join("my.application"), 1);
+    sb.node_project(&root.join("app"), 1);
+    let root = root.display().to_string();
+
+    let scan = sb.json(&["scan", "--root", &root]);
+
+    let found = scan["reclaimables"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|r| r["id"] == "node_modules")
+        .count();
+    assert_eq!(found, 2);
+}
+
+#[test]
+fn a_scan_root_named_like_a_bundle_is_searched_as_it_was_named() {
+    let sb = Sandbox::new();
+    let root = sb.root().join("Mine.app");
+    sb.node_project(&root.join("project"), 1);
+    let root = root.display().to_string();
+
+    let scan = sb.json(&["scan", "--root", &root]);
+
+    assert!(scan.to_string().contains("node_modules"), "{scan}");
+}

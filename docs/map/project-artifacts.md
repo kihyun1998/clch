@@ -26,6 +26,7 @@ Only under scan roots, and within them:
 - **Nothing inside a project artifact is searched**, since deleting the outer one removes it anyway.
 - **A `node_modules`, `.venv` or `.dart_tool` that is not an artifact is not searched either.** Packages inside a `node_modules` have `package.json` and `node_modules` of their own, and would otherwise be listed as projects. A `build` or `target` that is not an artifact may hold real projects, so it is searched.
 - **Hidden folders, `~/Library`, `AppData` and tool caches are not searched.** The `node_modules` in them belong to editors, applications and the tools themselves (VS Code extensions, the npx cache), which break or re-download rather than rebuild.
+- **A folder ending in `.app` is not searched**, as an application's `node_modules` under a scan root is the application's, and npkill treats such paths as dangerous. It costs a project named that way its listing, not a folder; a search of `/Volumes/T7/GitHub` four levels down found no such folder. A scan root named so is searched, as it was named.
 - **Symbolic links are not entered**, so a scan stays inside what was named.
 
 ## Age

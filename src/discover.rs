@@ -21,8 +21,8 @@ pub struct Discovery {
     pub incomplete_roots: Vec<PathBuf>,
 }
 
-/// Searches `roots` for project artifacts. Symbolic links, hidden folders and
-/// the folders in `not_projects` are not entered, and nothing inside a project
+/// Searches `roots` for project artifacts. Symbolic links, hidden folders,
+/// `.app` bundles and the folders in `not_projects` are not entered, and nothing inside a project
 /// artifact is searched. A root that is missing or inside `not_projects` counts
 /// as unavailable.
 pub fn find(env: &Env, roots: &[PathBuf], not_projects: &[PathBuf]) -> Discovery {
@@ -144,7 +144,7 @@ impl Search<'_> {
                     continue;
                 }
             }
-            if !name.starts_with('.') {
+            if !name.starts_with('.') && !name.ends_with(".app") {
                 self.dir(&path, &real_child);
             }
         }
