@@ -19,3 +19,7 @@
 
 - **What a cleanup freed is the scan before it minus the scan after it**, for each disk and in total, so a file two reclaimables share counts once, and a file another reclaimable still holds counts as not freed. A single reclaimable's figure is how much it shrank, which can include such a file.
 - **It costs two measurements of the tree**, no matter how many reclaimables are cleaned, and the second one is the snapshot. A measurement of the maintainer's project folders (about 103 GB and 1.3 million files, HFS+ on an external drive, under load) took 46–57 seconds.
+
+## Saying what it is doing
+
+A scan of large roots printed nothing for 32 seconds, so it reports its steps through `Env`: one message before each measurement or tool question, and folders being searched at most twice a second. The CLI stays quiet for the first second, so a quick scan adds nothing to stderr, and writes to stderr so `--json` stays clean: one line replaced in place on a terminal, otherwise a line per message. The dashboard shows the same messages through `GET /api/progress`. Nothing estimates how much is left: the size of a tree is what the walk is finding out.

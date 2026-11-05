@@ -1,5 +1,6 @@
 //! Rendering results for people.
 
+use std::io::IsTerminal;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -17,6 +18,26 @@ fn shown(path: &Path) -> String {
         .map(|c| if c.is_control() { '?' } else { c })
         .collect()
 }
+
+/// Says on stderr what a scan is doing: one line replaced in place on a terminal,
+/// otherwise a line per message.
+pub fn progress_on_stderr(message: Option<&str>) {
+    let terminal = std::io::stderr().is_terminal();
+    match message {
+        Some(text) if terminal => {
+            let chars: Vec<char> = text.chars().filter(|c| !c.is_control()).collect();
+            let start = chars.len().saturating_sub(PROGRESS_WIDTH);
+            let tail: String = chars[start..].iter().collect();
+            eprint!("\r\x1b[K{tail}");
+        }
+        Some(text) => eprintln!("{text}"),
+        None if terminal => eprint!("\r\x1b[K"),
+        None => {}
+    }
+}
+
+/// The most of a message shown on a terminal, so that it stays on one line.
+const PROGRESS_WIDTH: usize = 70;
 
 pub fn human_size(bytes: u64) -> String {
     const UNITS: [&str; 5] = ["B", "kB", "MB", "GB", "TB"];

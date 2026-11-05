@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
 use crate::catalog::{self, ProjectArtifactKind};
+use crate::env::Env;
 
 /// A project artifact found on disk.
 pub struct Found {
@@ -24,7 +25,7 @@ pub struct Discovery {
 /// the folders in `not_projects` are not entered, and nothing inside a project
 /// artifact is searched. A root that is missing or inside `not_projects` counts
 /// as unavailable.
-pub fn find(roots: &[PathBuf], not_projects: &[PathBuf]) -> Discovery {
+pub fn find(env: &Env, roots: &[PathBuf], not_projects: &[PathBuf]) -> Discovery {
     let not_projects: Vec<PathBuf> = not_projects
         .iter()
         .map(|p| fs::canonicalize(p).unwrap_or_else(|_| p.clone()))
@@ -47,6 +48,7 @@ pub fn find(roots: &[PathBuf], not_projects: &[PathBuf]) -> Discovery {
             continue;
         }
         let mut search = Search {
+            env,
             not_projects: &not_projects,
             seen: &mut seen,
             artifacts: &mut discovery.artifacts,
@@ -96,6 +98,7 @@ fn has_line(file: &Path, line: &str) -> bool {
 }
 
 struct Search<'a> {
+    env: &'a Env,
     not_projects: &'a [PathBuf],
     seen: &'a mut BTreeSet<PathBuf>,
     artifacts: &'a mut Vec<Found>,
@@ -105,6 +108,8 @@ struct Search<'a> {
 impl Search<'_> {
     /// Searches `dir`, whose real location is `real`.
     fn dir(&mut self, dir: &Path, real: &Path) {
+        self.env
+            .progress_passing(|| format!("Searching {}", dir.display()));
         let Ok(entries) = fs::read_dir(dir) else {
             self.complete = false;
             return;

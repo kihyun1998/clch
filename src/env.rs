@@ -1,6 +1,6 @@
 //! The machine clch runs on: per-user folders and the tools on `PATH`.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::io::Read;
@@ -25,7 +25,23 @@ pub struct Env {
     cwd: PathBuf,
     answers: RefCell<HashMap<ToolCall, Option<String>>>,
     reports: RefCell<HashMap<ToolCall, ToolAnswer>>,
+    progress: RefCell<Option<Progress>>,
 }
+
+/// Where word of a long run goes.
+struct Progress {
+    started: Instant,
+    /// How long a run stays quiet before it says anything.
+    quiet_for: Duration,
+    last: Cell<Option<Instant>>,
+    sink: ProgressSink,
+}
+
+/// Takes what a scan is doing, or `None` once it has finished.
+pub type ProgressSink = Box<dyn Fn(Option<&str>)>;
+
+/// The least time between two passing messages.
+const PROGRESS_EVERY: Duration = Duration::from_millis(500);
 
 impl Env {
     pub fn from_process() -> Self {
@@ -43,6 +59,7 @@ impl Env {
             cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             answers: RefCell::new(HashMap::new()),
             reports: RefCell::new(HashMap::new()),
+            progress: RefCell::new(None),
         }
     }
 
@@ -210,6 +227,49 @@ impl Env {
             command.current_dir(home);
         }
         command
+    }
+
+    /// Sends word of what a scan is doing to `sink`, once `quiet_for` has passed.
+    pub fn report_progress_to(&self, quiet_for: Duration, sink: ProgressSink) {
+        *self.progress.borrow_mut() = Some(Progress {
+            started: Instant::now(),
+            quiet_for,
+            last: Cell::new(None),
+            sink,
+        });
+    }
+
+    /// Says what is starting now, which may take a while.
+    pub fn progress_step(&self, message: impl FnOnce() -> String) {
+        if let Some(progress) = self.progress.borrow().as_ref()
+            && progress.started.elapsed() >= progress.quiet_for
+        {
+            progress.last.set(Some(Instant::now()));
+            (progress.sink)(Some(&message()));
+        }
+    }
+
+    /// Says what is passing by; most of these are dropped.
+    pub fn progress_passing(&self, message: impl FnOnce() -> String) {
+        if let Some(progress) = self.progress.borrow().as_ref()
+            && progress.started.elapsed() >= progress.quiet_for
+            && progress
+                .last
+                .get()
+                .is_none_or(|t| t.elapsed() >= PROGRESS_EVERY)
+        {
+            progress.last.set(Some(Instant::now()));
+            (progress.sink)(Some(&message()));
+        }
+    }
+
+    /// Says the scan has finished.
+    pub fn progress_done(&self) {
+        if let Some(progress) = self.progress.borrow().as_ref()
+            && progress.last.take().is_some()
+        {
+            (progress.sink)(None);
+        }
     }
 
     /// What `tool args` reports about the present state of things, from the home

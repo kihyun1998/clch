@@ -4,6 +4,7 @@ use std::io::{Cursor, Read};
 use std::net::TcpListener;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
@@ -34,6 +35,8 @@ struct Guard {
     previewed: Mutex<Option<Previewed>>,
     /// Held while a cleanup runs.
     cleaning: Mutex<()>,
+    /// What a scan under way is doing.
+    progress: Arc<Mutex<Option<String>>>,
 }
 
 /// What a person was shown and may confirm.
@@ -111,6 +114,7 @@ pub fn serve(env: &Env, no_open: bool) -> std::io::Result<()> {
         latest: Mutex::new(None),
         previewed: Mutex::new(None),
         cleaning: Mutex::new(()),
+        progress: Arc::new(Mutex::new(None)),
     });
     for mut request in server.incoming_requests() {
         let guard = Arc::clone(&guard);
@@ -200,6 +204,14 @@ fn api(guard: &Guard, request: &mut Request, path: &str) -> Reply {
             Err(reply) => reply,
         },
         ("/api/cleanup", _) => error(405, "use POST"),
+        ("/api/progress", Method::Get) => {
+            let message = guard
+                .progress
+                .lock()
+                .expect("no thread panics holding this");
+            json(200, &serde_json::json!({ "message": *message }))
+        }
+        ("/api/progress", _) => error(405, "use GET"),
         ("/api/roots", Method::Get) => read_roots(),
         ("/api/roots", Method::Post) => match body(request) {
             Ok(wanted) => change_roots(wanted),
@@ -322,7 +334,7 @@ fn cleanup(guard: &Guard, wanted: CleanupRequest) -> Reply {
         }
         held.take().expect("just checked")
     };
-    let env = Env::from_process();
+    let env = reporting_env(guard);
     let scope = match config::configured_scope(&env) {
         Ok(scope) => scope,
         Err(e) => return error(500, &e.to_string()),
@@ -354,8 +366,21 @@ fn cleanup(guard: &Guard, wanted: CleanupRequest) -> Reply {
     reply
 }
 
-fn run_scan(guard: &Guard) -> Reply {
+/// An `Env` whose scans say what they are doing to `guard`.
+fn reporting_env(guard: &Guard) -> Env {
     let env = Env::from_process();
+    let progress = Arc::clone(&guard.progress);
+    env.report_progress_to(
+        Duration::ZERO,
+        Box::new(move |message| {
+            *progress.lock().expect("no thread panics holding this") = message.map(str::to_string);
+        }),
+    );
+    env
+}
+
+fn run_scan(guard: &Guard) -> Reply {
+    let env = reporting_env(guard);
     let scope = match config::configured_scope(&env) {
         Ok(scope) => scope,
         Err(e) => return error(500, &e.to_string()),

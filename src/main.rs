@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::time::Duration;
 
 use clap::{Parser, Subcommand};
 
@@ -136,6 +137,9 @@ fn print_json(value: &impl serde::Serialize) {
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let env = Env::from_process();
+    if !matches!(cli.command, Command::Dashboard { .. }) {
+        env.report_progress_to(Duration::from_secs(1), Box::new(output::progress_on_stderr));
+    }
     match run(&env, cli.command) {
         Ok(code) => code,
         Err(e) => {

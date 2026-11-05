@@ -60,6 +60,7 @@ export function App() {
   const [cleaning, setCleaning] = useState(false);
   const [outcome, setOutcome] = useState<Outcome | null>(null);
   const [rootsOpen, setRootsOpen] = useState(false);
+  const [doing, setDoing] = useState<string | null>(null);
 
   const loadHistory = useCallback(async () => {
     try {
@@ -159,6 +160,19 @@ export function App() {
     .reduce((sum, r) => sum + r.size_bytes, 0);
   const busy = scanning || cleaning;
 
+  useEffect(() => {
+    if (!busy) {
+      setDoing(null);
+      return;
+    }
+    const timer = setInterval(() => {
+      get<{ message: string | null }>("/api/progress")
+        .then((now) => setDoing(now.message))
+        .catch(() => setDoing(null));
+    }, 500);
+    return () => clearInterval(timer);
+  }, [busy]);
+
   return (
     <div className="page">
       <header className="top">
@@ -199,6 +213,7 @@ export function App() {
           <h1>Measuring your disks</h1>
           <div className="progress"><i /></div>
           <p>With large scan roots this takes about a minute.</p>
+          <p className="path">{doing}</p>
         </div>
       )}
 
@@ -207,6 +222,7 @@ export function App() {
           <h1>Cleaning</h1>
           <div className="progress"><i /></div>
           <p>clch checks once more that nothing changed, runs each cleanup, then measures again.</p>
+          <p className="path">{doing}</p>
         </div>
       )}
 

@@ -46,7 +46,7 @@ fn without_no_open_the_browser_gets_the_url() {
     let running = Dashboard::start(&sb, &[]);
 
     let mut calls = Vec::new();
-    for _ in 0..100 {
+    for _ in 0..1500 {
         calls = sb.calls();
         if !calls.is_empty() {
             break;

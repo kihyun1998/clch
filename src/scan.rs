@@ -180,6 +180,9 @@ pub fn run(env: &Env, scope: &Scope) -> Scan {
                    path: PathBuf,
                    run_from: Option<PathBuf>,
                    reported: Option<u64>| {
+        if reported.is_none() {
+            env.progress_step(|| format!("Measuring {}", path.display()));
+        }
         let measured = match reported {
             Some(bytes) => Measurement {
                 bytes,
@@ -220,6 +223,7 @@ pub fn run(env: &Env, scope: &Scope) -> Scan {
 
     let mut not_projects = env.application_folders();
     for kind in catalog::tool_caches() {
+        env.progress_step(|| format!("Looking for the {}", kind.name));
         for located in (kind.locate)(env, &scope.roots) {
             let in_folder = located.path.is_absolute() && located.path.is_dir();
             if in_folder {
@@ -250,7 +254,7 @@ pub fn run(env: &Env, scope: &Scope) -> Scan {
             );
         }
     }
-    let found = discover::find(&scope.roots, &not_projects);
+    let found = discover::find(env, &scope.roots, &not_projects);
     for artifact in found.artifacts {
         add(
             Kind::ProjectArtifact,
@@ -261,6 +265,7 @@ pub fn run(env: &Env, scope: &Scope) -> Scan {
             None,
         );
     }
+    env.progress_done();
     reclaimables.sort_by_key(|r| match r.kind {
         Kind::ToolCache => (0, 0),
         Kind::ProjectArtifact => (1, u64::MAX - r.size_bytes),
