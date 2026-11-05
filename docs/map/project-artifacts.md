@@ -11,6 +11,9 @@ The maintainer's decisions are in ADR-0005.
 - **Another disk mounted inside stops the deletion.** The walk that measures it does not enter that disk, but `remove_dir_all` would.
 - **Deleting checks again.** Between the plan and the deletion the folder may have changed, so its marker file is looked for once more, and a folder that is now a link is refused.
 - **Links inside are removed, not followed.** `std::fs::remove_dir_all` removes a symbolic link or junction itself and leaves its target; the tests pin this on each OS.
+- **A plan warns about a pnpm workspace root**, recognised by `pnpm-workspace.yaml` beside `node_modules`, as a completeness read saw its members fail with `MODULE_NOT_FOUND`. Other workspaces are not recognised: their members keep their own `node_modules`, or that has not been checked.
+- **A deletion that fails partway says to reinstall.** `remove_dir_all` stops at the first folder it cannot remove, having taken what came before it. A failure with the size unchanged says nothing more.
+- **A long plan stays readable.** Its total and warnings come first, and each row's line fits 80 columns, with its command, reason and path beneath, as a 301-row table had wrapped every row and put its totals on line 304.
 - **The cleanup level does not apply.** A project artifact is one folder that either goes or stays, so unused and full cleanup both delete it, and neither runs until selected. A plan of only project artifacts does not name a level.
 
 ## Where they are looked for

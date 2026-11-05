@@ -229,49 +229,23 @@ pub fn plan_table(plan: &Plan) -> String {
         out.push_str(&tool_notes(&plan.tool_notes));
         return out;
     }
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| d.as_millis() as i64);
-    let rows: Vec<[String; 5]> = plan
-        .plan
-        .iter()
-        .map(|e| {
-            let space = match (e.expected_bytes, e.cleanable) {
-                (Some(b), _) => bounded(b, e.complete),
-                (None, true) => "known after cleaning".to_string(),
-                (None, false) => String::new(),
-            };
-            let action = match (&e.action, &e.reason) {
-                (Some(a), _) => a.clone(),
-                (None, Some(r)) => format!("skipped: {r}"),
-                _ => String::new(),
-            };
-            let path = e.path.as_ref().map_or(String::new(), |p| shown(p));
-            let changed = e
-                .last_modified_ms
-                .map_or(String::new(), |ms| days_ago(ms, now));
-            [e.name.clone(), action, space, changed, path]
-        })
-        .collect();
-    out.push_str(&table(
-        ["NAME", "ACTION", "SPACE", "LAST CHANGED", "PATH"],
-        &rows,
-    ));
+    if plan.expected_total_bytes > 0 {
+        out.push_str(&format!(
+            "Frees at most {} from {} reclaimable(s).\n\n",
+            human_size(plan.expected_total_bytes),
+            plan.plan.iter().filter(|e| e.cleanable).count()
+        ));
+    }
     let mut warned: Vec<&str> = Vec::new();
     for entry in &plan.plan {
         if let Some(warning) = entry.warning.as_deref()
             && !warned.contains(&warning)
         {
             warned.push(warning);
-            out.push_str(&format!("\nWarning: {warning}\n"));
+            out.push_str(&format!("Warning: {warning}\n\n"));
         }
     }
-    if plan.expected_total_bytes > 0 {
-        out.push_str(&format!(
-            "\nFrees at most {}.\n",
-            human_size(plan.expected_total_bytes)
-        ));
-    }
+    out.push_str(&plan_rows(plan));
     if plan.not_selected > 0 {
         out.push_str(&format!(
             "\n{} project artifact(s) not selected: name a kind or a path, or use --older-than-days.\n",
@@ -283,6 +257,70 @@ pub fn plan_table(plan: &Plan) -> String {
         out.push_str("\nRun again with --yes to carry out this plan.\n");
     }
     out
+}
+
+/// Each entry on a line that fits a terminal, with what is long on lines of its
+/// own beneath it.
+fn plan_rows(plan: &Plan) -> String {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as i64);
+    let rows: Vec<[String; 3]> = plan
+        .plan
+        .iter()
+        .map(|e| {
+            let space = match (e.expected_bytes, e.cleanable) {
+                (Some(b), _) => bounded(b, e.complete),
+                (None, true) => "known after cleaning".to_string(),
+                (None, false) => String::new(),
+            };
+            let changed = e
+                .last_modified_ms
+                .map_or(String::new(), |ms| days_ago(ms, now));
+            [e.name.clone(), space, changed]
+        })
+        .collect();
+    let lined = table(["NAME", "SPACE", "LAST CHANGED"], &rows);
+    let mut lines = lined.lines();
+    let mut out = format!("{}\n", lines.next().unwrap_or_default());
+    for (entry, line) in plan.plan.iter().zip(lines) {
+        out.push_str(line);
+        out.push('\n');
+        match (&entry.action, &entry.reason) {
+            (Some(action), _) => out.push_str(&format!("  {action}\n")),
+            (None, Some(reason)) => {
+                for part in wrapped(&format!("skipped: {reason}"), PLAN_WIDTH - 2) {
+                    out.push_str(&format!("  {part}\n"));
+                }
+            }
+            _ => {}
+        }
+        if let Some(path) = &entry.path {
+            out.push_str(&format!("  {}\n", shown(path)));
+        }
+    }
+    out
+}
+
+/// How wide a plan's lines are kept, a path aside.
+const PLAN_WIDTH: usize = 80;
+
+/// `text` broken at spaces into lines of at most `width` characters, where its
+/// words allow.
+fn wrapped(text: &str, width: usize) -> Vec<String> {
+    let mut lines = vec![String::new()];
+    for word in text.split(' ') {
+        let line = lines.last_mut().expect("starts with one");
+        if !line.is_empty() && line.chars().count() + 1 + word.chars().count() > width {
+            lines.push(word.to_string());
+        } else {
+            if !line.is_empty() {
+                line.push(' ');
+            }
+            line.push_str(word);
+        }
+    }
+    lines
 }
 
 pub fn outcome_table(outcome: &Outcome) -> String {

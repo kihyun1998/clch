@@ -281,7 +281,7 @@ fn entry(env: &Env, r: &Reclaimable, level: Level) -> PlanEntry {
                 expected_bytes: Some(r.size_bytes),
                 complete: r.complete,
                 reason: None,
-                warning: None,
+                warning: artifact_warning(kind, &r.path),
                 path: Some(r.path.clone()),
                 last_modified_ms: r.last_modified_ms,
                 method: Some(Method::Direct(kind)),
@@ -408,6 +408,17 @@ fn entry(env: &Env, r: &Reclaimable, level: Level) -> PlanEntry {
         path: Some(r.path.clone()),
         last_modified_ms: None,
     }
+}
+
+/// What a person should know before this project artifact goes.
+fn artifact_warning(kind: &ProjectArtifactKind, path: &Path) -> Option<String> {
+    let workspace = path.parent()?.join("pnpm-workspace.yaml");
+    (kind.id == "node_modules" && workspace.is_file()).then(|| {
+        format!(
+            "{} is a pnpm workspace root: its members break until you reinstall.",
+            path.parent().unwrap_or(path).display()
+        )
+    })
 }
 
 fn not_cleanable(id: &str, name: &str, reason: String) -> PlanEntry {
@@ -545,6 +556,8 @@ pub fn execute(env: &Env, plan: Plan, before: &Scan, scope: &Scope) -> (Outcome,
                     .find(|a| a.id == w.id && a.path == w.path)
             });
             let attempted = run.is_some();
+            let partly_deleted = matches!(entry.method, Some(Method::Direct(_)))
+                && was.is_some_and(|w| now.is_none_or(|n| n.size_bytes < w.size_bytes));
             let unseen = was.is_some_and(&silent_after);
             let freed_bytes = match was {
                 Some(_) if unseen => 0,
@@ -569,7 +582,15 @@ pub fn execute(env: &Env, plan: Plan, before: &Scan, scope: &Scope) -> (Outcome,
                         && now.is_none_or(|n| n.complete)),
                 action: entry.action,
                 reason: entry.reason,
-                output: run.and_then(Result::err),
+                output: run.and_then(Result::err).map(|output| {
+                    if partly_deleted {
+                        format!(
+                            "{output}. Part of it was deleted: reinstall or rebuild this project."
+                        )
+                    } else {
+                        output
+                    }
+                }),
             }
         })
         .collect();
