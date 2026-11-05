@@ -282,7 +282,10 @@ struct LastSeen {
 fn should_be_found(row: &LastSeen, scan: &Scan) -> bool {
     match row.kind {
         Kind::ToolCache => {
-            !Path::new(&row.path).is_dir()
+            let tool_silent = catalog::tool_cache(&row.id)
+                .is_some_and(|k| scan.note_for(k.cleanup.tool).is_some());
+            !tool_silent
+                && !Path::new(&row.path).is_dir()
                 && row
                     .disk
                     .as_deref()

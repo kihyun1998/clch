@@ -6,7 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 
-use crate::catalog::{self, Kind};
+use crate::catalog::{self, Kind, LocatedSize};
 use crate::discover;
 use crate::disks::{self, Disk};
 use crate::env::Env;
@@ -90,6 +90,13 @@ pub struct Scope {
     pub one_off: bool,
 }
 
+/// Why a tool's numbers are missing from a scan.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ToolNote {
+    pub tool: String,
+    pub reason: String,
+}
+
 #[derive(Debug, Serialize)]
 pub struct Scan {
     pub reclaimables: Vec<Reclaimable>,
@@ -107,6 +114,8 @@ pub struct Scan {
     pub incomplete_roots: Vec<PathBuf>,
     /// True when no scan roots are set, so no project artifact was looked for.
     pub project_artifacts_skipped: bool,
+    /// Tools on `PATH` whose numbers are missing from this scan, and why.
+    pub tool_notes: Vec<ToolNote>,
     /// True when one-off scan roots replaced the configured ones.
     pub partial: bool,
     /// When the scan started, in milliseconds since the Unix epoch.
@@ -115,6 +124,11 @@ pub struct Scan {
 }
 
 impl Scan {
+    /// Why this scan has no numbers from `tool`, if it says.
+    pub fn note_for(&self, tool: &str) -> Option<&ToolNote> {
+        self.tool_notes.iter().find(|n| n.tool == tool)
+    }
+
     /// Whether this scan searched `path` and could read all the way: its
     /// absence from the scan then means it is not there.
     pub fn covers(&self, path: &Path) -> bool {
@@ -152,15 +166,34 @@ impl Scan {
 pub const MS_PER_DAY: i64 = 24 * 60 * 60 * 1000;
 
 pub fn run(env: &Env, scope: &Scope) -> Scan {
+    env.forget_reports();
     let taken_at_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_millis() as i64);
     let mut measurer = Measurer::default();
     let mut totals: BTreeMap<String, DiskTotal> = BTreeMap::new();
     let mut reclaimables = Vec::new();
-    let mut add = |kind: Kind, id: &str, name: &str, path: PathBuf, run_from: Option<PathBuf>| {
-        let measured = measurer.measure(&path);
-        let disk = disks::of_path(&path);
+    let mut tool_notes: Vec<ToolNote> = Vec::new();
+    let mut add = |kind: Kind,
+                   id: &str,
+                   name: &str,
+                   path: PathBuf,
+                   run_from: Option<PathBuf>,
+                   reported: Option<u64>| {
+        let measured = match reported {
+            Some(bytes) => Measurement {
+                bytes,
+                unique_bytes: bytes,
+                complete: true,
+                last_modified_ms: None,
+            },
+            None => measurer.measure(&path),
+        };
+        let disk = if path.is_absolute() {
+            disks::of_path(&path)
+        } else {
+            None
+        };
         add_to_total(&mut totals, disk.as_ref(), &measured);
         let (last_modified_ms, age_known) = if kind == Kind::ProjectArtifact {
             let project = path.parent().map(discover::project_age).unwrap_or_default();
@@ -188,16 +221,33 @@ pub fn run(env: &Env, scope: &Scope) -> Scan {
     let mut not_projects = env.application_folders();
     for kind in catalog::tool_caches() {
         for located in (kind.locate)(env, &scope.roots) {
-            if located.path.is_absolute() && located.path.is_dir() {
+            let in_folder = located.path.is_absolute() && located.path.is_dir();
+            if in_folder {
                 not_projects.push(located.path.clone());
-                add(
-                    Kind::ToolCache,
-                    kind.id,
-                    kind.name,
-                    located.path,
-                    located.run_from,
-                );
             }
+            let reported = match located.size {
+                LocatedSize::Measured if in_folder => None,
+                LocatedSize::Measured => continue,
+                LocatedSize::Reported(bytes) => Some(bytes),
+                LocatedSize::Unavailable(reason) => {
+                    let note = ToolNote {
+                        tool: kind.cleanup.tool.to_string(),
+                        reason,
+                    };
+                    if !tool_notes.contains(&note) {
+                        tool_notes.push(note);
+                    }
+                    continue;
+                }
+            };
+            add(
+                Kind::ToolCache,
+                kind.id,
+                kind.name,
+                located.path,
+                located.run_from,
+                reported,
+            );
         }
     }
     let found = discover::find(&scope.roots, &not_projects);
@@ -207,6 +257,7 @@ pub fn run(env: &Env, scope: &Scope) -> Scan {
             artifact.kind.id,
             artifact.kind.name,
             artifact.path,
+            None,
             None,
         );
     }
@@ -223,6 +274,7 @@ pub fn run(env: &Env, scope: &Scope) -> Scan {
         unavailable_roots: found.unavailable_roots,
         incomplete_roots: found.incomplete_roots,
         project_artifacts_skipped: scope.roots.is_empty(),
+        tool_notes,
         partial: scope.one_off,
         taken_at_ms,
     }

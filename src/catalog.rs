@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use crate::disks;
-use crate::env::Env;
+use crate::env::{Env, ToolAnswer};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -45,6 +45,8 @@ pub struct ToolCacheKind {
     /// Whether each disk has its own, so that its identity is its path.
     pub one_per_disk: bool,
     pub cleanup: NativeCleanup,
+    /// What a person must be told on Windows after cleaning it.
+    pub windows_note: Option<&'static str>,
 }
 
 /// Where an instance of a tool cache is.
@@ -53,6 +55,17 @@ pub struct Located {
     /// The folder its tool must run in to act on this instance, when not the
     /// home folder.
     pub run_from: Option<PathBuf>,
+    pub size: LocatedSize,
+}
+
+/// Where the size of an instance of a tool cache comes from.
+pub enum LocatedSize {
+    /// The files at its path, as measured.
+    Measured,
+    /// What its tool reports, for a store clch cannot walk.
+    Reported(u64),
+    /// Its tool cannot say at the moment, for this reason.
+    Unavailable(String),
 }
 
 impl Located {
@@ -60,6 +73,7 @@ impl Located {
         Located {
             path,
             run_from: None,
+            size: LocatedSize::Measured,
         }
     }
 }
@@ -108,6 +122,7 @@ pub fn tool_caches() -> &'static [ToolCacheKind] {
                 min_version: None,
                 below_version: None,
             },
+            windows_note: None,
         },
         ToolCacheKind {
             id: "npx-cache",
@@ -123,6 +138,7 @@ pub fn tool_caches() -> &'static [ToolCacheKind] {
                 min_version: Some("11.2.0"),
                 below_version: None,
             },
+            windows_note: None,
         },
         ToolCacheKind {
             id: "pnpm-store",
@@ -138,6 +154,7 @@ pub fn tool_caches() -> &'static [ToolCacheKind] {
                 min_version: None,
                 below_version: None,
             },
+            windows_note: None,
         },
         ToolCacheKind {
             id: "yarn-cache",
@@ -153,6 +170,7 @@ pub fn tool_caches() -> &'static [ToolCacheKind] {
                 min_version: None,
                 below_version: Some("2.0.0"),
             },
+            windows_note: None,
         },
         ToolCacheKind {
             id: "yarn-berry-cache",
@@ -168,6 +186,7 @@ pub fn tool_caches() -> &'static [ToolCacheKind] {
                 min_version: Some("2.0.0"),
                 below_version: None,
             },
+            windows_note: None,
         },
         ToolCacheKind {
             id: "pip-cache",
@@ -183,6 +202,7 @@ pub fn tool_caches() -> &'static [ToolCacheKind] {
                 min_version: None,
                 below_version: None,
             },
+            windows_note: None,
         },
         ToolCacheKind {
             id: "uv-cache",
@@ -198,6 +218,7 @@ pub fn tool_caches() -> &'static [ToolCacheKind] {
                 min_version: None,
                 below_version: None,
             },
+            windows_note: None,
         },
         ToolCacheKind {
             id: "cargo-registry",
@@ -218,6 +239,7 @@ pub fn tool_caches() -> &'static [ToolCacheKind] {
                 min_version: None,
                 below_version: None,
             },
+            windows_note: None,
         },
         ToolCacheKind {
             id: "cargo-git",
@@ -237,6 +259,7 @@ pub fn tool_caches() -> &'static [ToolCacheKind] {
                 min_version: None,
                 below_version: None,
             },
+            windows_note: None,
         },
         ToolCacheKind {
             id: "go-build-cache",
@@ -252,6 +275,7 @@ pub fn tool_caches() -> &'static [ToolCacheKind] {
                 min_version: None,
                 below_version: None,
             },
+            windows_note: None,
         },
         ToolCacheKind {
             id: "go-module-cache",
@@ -267,6 +291,39 @@ pub fn tool_caches() -> &'static [ToolCacheKind] {
                 min_version: None,
                 below_version: None,
             },
+            windows_note: None,
+        },
+        ToolCacheKind {
+            id: "docker-build-cache",
+            name: "Docker build cache",
+            locate: docker::build_cache,
+            one_per_disk: false,
+            cleanup: NativeCleanup {
+                tool: "docker",
+                also_named: &[],
+                deletable: None,
+                unused: Some(&["builder", "prune", "--force"]),
+                full: Some(&["builder", "prune", "--all", "--force"]),
+                min_version: None,
+                below_version: None,
+            },
+            windows_note: Some(docker::WSL_DISK),
+        },
+        ToolCacheKind {
+            id: "docker-images",
+            name: "Docker unused images",
+            locate: docker::images,
+            one_per_disk: false,
+            cleanup: NativeCleanup {
+                tool: "docker",
+                also_named: &[],
+                deletable: None,
+                unused: Some(&["image", "prune", "--force"]),
+                full: Some(&["image", "prune", "--all", "--force"]),
+                min_version: None,
+                below_version: None,
+            },
+            windows_note: Some(docker::WSL_DISK),
         },
     ]
 }
@@ -410,6 +467,7 @@ mod pnpm {
                 stores.push(Located {
                     run_from: Some(store.clone()),
                     path: store,
+                    size: LocatedSize::Measured,
                 });
             }
         }
@@ -547,6 +605,163 @@ mod go {
                 .or_else(|| Some(env.home()?.join("go")))?;
             Some(gopath.join("pkg").join("mod"))
         }))
+    }
+}
+
+mod docker {
+    use super::*;
+
+    /// What a Docker reclaimable's path says when Docker's data is in no folder
+    /// clch can name.
+    const NO_FOLDER: &str = "docker engine";
+
+    const ENDPOINT: &[&str] = &[
+        "context",
+        "inspect",
+        "--format",
+        "{{.Endpoints.docker.Host}}",
+    ];
+
+    pub const WSL_DISK: &str = "\
+With Docker Desktop on WSL 2, Docker's data lives in a virtual disk, which may not shrink when data inside it is deleted. Check your free space: a sparse disk gives the space back by itself. If it did not come back, compact the disk yourself:
+  1. Quit Docker Desktop.
+  2. Run: wsl --shutdown
+  3. Find the .vhdx file in %LOCALAPPDATA%\\Docker\\wsl, or in the folder set under Settings > Resources > Advanced in Docker Desktop.
+  4. In a terminal run as administrator, run diskpart, then:
+       select vdisk file=\"<path to the .vhdx file>\"
+       compact vdisk
+       exit";
+
+    pub fn build_cache(env: &Env, _roots: &[PathBuf]) -> Vec<Located> {
+        found(env, build_cache_size)
+    }
+
+    pub fn images(env: &Env, _roots: &[PathBuf]) -> Vec<Located> {
+        found(env, images_size)
+    }
+
+    /// A reclaimable sized by `size`, once it is known that the engine answering
+    /// is on this machine.
+    fn found(env: &Env, size: fn(&Env) -> LocatedSize) -> Vec<Located> {
+        let size = match env.tool_report("docker", ENDPOINT) {
+            ToolAnswer::Absent => return Vec::new(),
+            ToolAnswer::Printed(endpoint) if is_local(endpoint.trim()) => size(env),
+            ToolAnswer::Printed(endpoint) => LocatedSize::Unavailable(format!(
+                "its engine is at {}, not on this machine, so it is left alone",
+                endpoint.trim()
+            )),
+            _ => LocatedSize::Unavailable("it could not say where its engine is".to_string()),
+        };
+        let folder = match size {
+            LocatedSize::Unavailable(_) => None,
+            _ => desktop_folder(env),
+        };
+        vec![Located {
+            path: folder.unwrap_or_else(|| PathBuf::from(NO_FOLDER)),
+            run_from: None,
+            size,
+        }]
+    }
+
+    fn is_local(endpoint: &str) -> bool {
+        endpoint.starts_with("unix://") || endpoint.starts_with("npipe://")
+    }
+
+    /// The report `args` asks the daemon for, as a size.
+    fn from_daemon(env: &Env, args: &[&str], read: impl Fn(&str) -> Option<u64>) -> LocatedSize {
+        match env.tool_report("docker", args) {
+            ToolAnswer::Printed(report) => match read(&report) {
+                Some(bytes) => LocatedSize::Reported(bytes),
+                None => LocatedSize::Unavailable("its disk report could not be read".to_string()),
+            },
+            ToolAnswer::TimedOut => {
+                LocatedSize::Unavailable("its daemon did not answer in time".to_string())
+            }
+            _ => LocatedSize::Unavailable("its daemon is not running or not answering".to_string()),
+        }
+    }
+
+    /// The build cache's `Reclaimable` figure in `docker system df`.
+    fn build_cache_size(env: &Env) -> LocatedSize {
+        from_daemon(env, &["system", "df", "--format", "json"], |report| {
+            report.lines().find_map(|line| {
+                let line: serde_json::Value = serde_json::from_str(line).ok()?;
+                (line["Type"] == "Build Cache")
+                    .then(|| line["Reclaimable"].as_str().and_then(bytes))?
+            })
+        })
+    }
+
+    /// What the images no container uses hold alone, in `docker system df
+    /// --verbose`.
+    fn images_size(env: &Env) -> LocatedSize {
+        from_daemon(
+            env,
+            &["system", "df", "--verbose", "--format", "json"],
+            |report| {
+                let report: serde_json::Value = serde_json::from_str(report).ok()?;
+                let mut total = 0;
+                for image in report["Images"].as_array()? {
+                    let users: u64 = image["Containers"].as_str()?.parse().ok()?;
+                    if users == 0 {
+                        total += bytes(image["UniqueSize"].as_str()?)?;
+                    }
+                }
+                Some(total)
+            },
+        )
+    }
+
+    /// The folder Docker's docs give for Docker Desktop's disk image, when the
+    /// engine answering is Docker Desktop's and the folder is there.
+    fn desktop_folder(env: &Env) -> Option<PathBuf> {
+        let engine = env.tool_value("docker", &["info", "--format", "{{.OperatingSystem}}"])?;
+        if engine != "Docker Desktop" {
+            return None;
+        }
+        let folder = if cfg!(windows) {
+            local_app_data(env)?.join("Docker").join("wsl")
+        } else {
+            env.home()?
+                .join("Library/Containers/com.docker.docker/Data/vms/0/data")
+        };
+        folder.is_dir().then_some(folder)
+    }
+
+    /// Bytes from Docker's human-readable size, such as `2.18GB (37%)`: decimal
+    /// units, rounded to four digits.
+    fn bytes(text: &str) -> Option<u64> {
+        let figure = text.split_whitespace().next()?;
+        let number_end = figure.find(|c: char| c.is_ascii_alphabetic())?;
+        let (number, unit) = figure.split_at(number_end);
+        let scale: f64 = match unit {
+            "B" => 1.0,
+            "kB" => 1e3,
+            "MB" => 1e6,
+            "GB" => 1e9,
+            "TB" => 1e12,
+            "PB" => 1e15,
+            _ => return None,
+        };
+        let value = number.parse::<f64>().ok()? * scale;
+        (value.is_finite() && value >= 0.0).then(|| value.round() as u64)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::bytes;
+
+        #[test]
+        fn sizes_read_as_docker_writes_them() {
+            assert_eq!(bytes("0B"), Some(0));
+            assert_eq!(bytes("0B (0%)"), Some(0));
+            assert_eq!(bytes("20.48kB (0%)"), Some(20_480));
+            assert_eq!(bytes("2.18GB (37%)"), Some(2_180_000_000));
+            assert_eq!(bytes("1.5TB"), Some(1_500_000_000_000));
+            assert_eq!(bytes("3XB"), None);
+            assert_eq!(bytes("N/A"), None);
+            assert_eq!(bytes(""), None);
+        }
     }
 }
 

@@ -8,7 +8,7 @@ use serde::Serialize;
 use crate::catalog::{self, Deletable, Kind, ProjectArtifactKind, ToolCacheKind};
 use crate::discover;
 use crate::env::{Env, ToolAnswer};
-use crate::scan::{self, Reclaimable, Scan, Scope};
+use crate::scan::{self, Reclaimable, Scan, Scope, ToolNote, UNKNOWN_DISK};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -64,6 +64,9 @@ pub struct Plan {
     pub expected_total_bytes: u64,
     /// True when no scan roots are set, so no project artifact was looked for.
     pub project_artifacts_skipped: bool,
+    /// Tools on `PATH` whose numbers are missing from the scan behind this, and
+    /// why.
+    pub tool_notes: Vec<ToolNote>,
 }
 
 impl Plan {
@@ -120,6 +123,10 @@ pub struct Outcome {
     pub freed_bytes: u64,
     /// False when a measurement behind `freed_bytes` was a lower bound.
     pub complete: bool,
+    /// What a person must be told because of what was cleaned.
+    pub notes: Vec<String>,
+    /// Tools on `PATH` whose numbers are missing from a scan behind this, and why.
+    pub tool_notes: Vec<ToolNote>,
 }
 
 /// What a cleanup freed on one disk.
@@ -163,7 +170,8 @@ pub fn plan(env: &Env, scan: &Scan, selection: &Selection, level: Level) -> Resu
         catalog::tool_cache(name).is_some() || catalog::project_artifact(name).is_some()
     };
     let path_of = |name: &str| env.absolute(Path::new(name));
-    let names_path = |name: &str, path: &Path| same_folder(&path_of(name), path);
+    let names_path =
+        |name: &str, path: &Path| path.is_absolute() && same_folder(&path_of(name), path);
     for name in &names {
         let is_path = scan.reclaimables.iter().any(|r| names_path(name, &r.path));
         if !is_kind(name) && !is_path {
@@ -209,13 +217,16 @@ pub fn plan(env: &Env, scan: &Scan, selection: &Selection, level: Level) -> Resu
                 .map(|k| k.name)
                 .or(catalog::project_artifact(name).map(|k| k.name))
                 .unwrap_or(name.as_str());
-            let reason =
-                if catalog::project_artifact(name).is_some() && scan.project_artifacts_skipped {
-                    "no scan roots are set; add one with `clch roots add <folder>`"
-                } else {
-                    "not found on this machine"
-                };
-            entries.push(not_cleanable(name, kind_name, reason.into()));
+            let silent = catalog::tool_cache(name)
+                .and_then(|k| scan.note_for(k.cleanup.tool).map(|note| (k, note)));
+            let reason = if let Some((kind, note)) = silent {
+                format!("{}: {}", kind.cleanup.tool, note.reason)
+            } else if catalog::project_artifact(name).is_some() && scan.project_artifacts_skipped {
+                "no scan roots are set; add one with `clch roots add <folder>`".to_string()
+            } else {
+                "not found on this machine".to_string()
+            };
+            entries.push(not_cleanable(name, kind_name, reason));
         }
     }
     Ok(Plan {
@@ -224,6 +235,7 @@ pub fn plan(env: &Env, scan: &Scan, selection: &Selection, level: Level) -> Resu
         plan: entries,
         not_selected,
         project_artifacts_skipped: scan.project_artifacts_skipped,
+        tool_notes: scan.tool_notes.clone(),
     })
 }
 
@@ -424,10 +436,16 @@ pub fn execute(env: &Env, plan: Plan, before: &Scan, scope: &Scope) -> (Outcome,
         .collect();
     let after = scan::run(env, scope);
 
+    let silent_after = |r: &Reclaimable| {
+        catalog::tool_cache(&r.id).is_some_and(|k| after.note_for(k.cleanup.tool).is_some())
+    };
     let cleaned_disks: BTreeSet<&str> = attempted
         .iter()
         .filter(|(_, run)| run.is_some())
-        .filter_map(|(entry, _)| reclaimable_at(before, entry)?.disk.as_deref())
+        .filter_map(|(entry, _)| {
+            let was = reclaimable_at(before, entry)?;
+            Some(was.disk.as_deref().unwrap_or(UNKNOWN_DISK))
+        })
         .collect();
     let disks: Vec<DiskFreed> = before
         .disks
@@ -435,15 +453,37 @@ pub fn execute(env: &Env, plan: Plan, before: &Scan, scope: &Scope) -> (Outcome,
         .filter(|d| cleaned_disks.contains(d.disk.as_str()))
         .map(|d| {
             let later = after.disks.iter().find(|a| a.disk == d.disk);
+            let unseen: u64 = before
+                .reclaimables
+                .iter()
+                .filter(|r| r.disk.as_deref().unwrap_or(UNKNOWN_DISK) == d.disk && silent_after(r))
+                .map(|r| r.size_bytes)
+                .sum();
             DiskFreed {
                 disk: d.disk.clone(),
                 freed_bytes: d
                     .reclaimable_bytes
-                    .saturating_sub(later.map_or(0, |a| a.reclaimable_bytes)),
-                complete: d.complete && later.is_none_or(|a| a.complete),
+                    .saturating_sub(later.map_or(0, |a| a.reclaimable_bytes))
+                    .saturating_sub(unseen),
+                complete: d.complete && later.is_none_or(|a| a.complete) && unseen == 0,
             }
         })
         .collect();
+
+    let mut notes: Vec<String> = Vec::new();
+    for (entry, _) in attempted
+        .iter()
+        .filter(|(_, run)| matches!(run, Some(Ok(()))))
+    {
+        let note = catalog::tool_cache(&entry.id)
+            .and_then(|k| k.windows_note)
+            .filter(|_| cfg!(windows));
+        if let Some(note) = note
+            && !notes.iter().any(|n| n == note)
+        {
+            notes.push(note.to_string());
+        }
+    }
 
     let attempted_paths = attempted
         .iter()
@@ -461,7 +501,9 @@ pub fn execute(env: &Env, plan: Plan, before: &Scan, scope: &Scope) -> (Outcome,
                     .find(|a| a.id == w.id && a.path == w.path)
             });
             let attempted = run.is_some();
+            let unseen = was.is_some_and(&silent_after);
             let freed_bytes = match was {
+                Some(_) if unseen => 0,
                 Some(was) if attempted => was
                     .size_bytes
                     .saturating_sub(now.map_or(0, |n| n.size_bytes)),
@@ -478,7 +520,9 @@ pub fn execute(env: &Env, plan: Plan, before: &Scan, scope: &Scope) -> (Outcome,
                 },
                 freed_bytes,
                 complete: !attempted
-                    || (was.is_none_or(|w| w.complete) && now.is_none_or(|n| n.complete)),
+                    || (!unseen
+                        && was.is_none_or(|w| w.complete)
+                        && now.is_none_or(|n| n.complete)),
                 action: entry.action,
                 reason: entry.reason,
                 output: run.and_then(Result::err),
@@ -488,6 +532,12 @@ pub fn execute(env: &Env, plan: Plan, before: &Scan, scope: &Scope) -> (Outcome,
 
     let freed_bytes = disks.iter().map(|d| d.freed_bytes).sum();
     let complete = disks.iter().all(|d| d.complete);
+    let mut tool_notes = plan.tool_notes;
+    for note in &after.tool_notes {
+        if !tool_notes.contains(note) {
+            tool_notes.push(note.clone());
+        }
+    }
     let outcome = Outcome {
         attempted: attempted_paths,
         level: plan.level,
@@ -496,6 +546,8 @@ pub fn execute(env: &Env, plan: Plan, before: &Scan, scope: &Scope) -> (Outcome,
         disks,
         freed_bytes,
         complete,
+        notes,
+        tool_notes,
     };
     (outcome, after)
 }

@@ -5,7 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::catalog::{self, Kind};
 use crate::clean::{Level, Outcome, Plan, Status};
-use crate::scan::{ChangeState, MS_PER_DAY, Scan};
+use crate::scan::{ChangeState, MS_PER_DAY, Scan, ToolNote};
 
 /// A byte count in decimal units (kB, MB, GB).
 /// `path` with control characters replaced, so that a folder's name cannot move
@@ -78,8 +78,17 @@ fn kind_label(kind: Kind) -> &'static str {
     }
 }
 
+/// A line per tool whose numbers are missing, saying why.
+fn tool_notes(notes: &[ToolNote]) -> String {
+    notes
+        .iter()
+        .map(|n| format!("\nNothing from {}: {}.\n", n.tool, n.reason))
+        .collect()
+}
+
 pub fn scan_table(scan: &Scan) -> String {
     let mut out = reclaimables_table(scan);
+    out.push_str(&tool_notes(&scan.tool_notes));
     if scan.project_artifacts_skipped {
         out.push_str(
             "\nProject artifacts were not looked for: no scan roots are set. \
@@ -196,6 +205,7 @@ pub fn plan_table(plan: &Plan) -> String {
     }
     if plan.plan.is_empty() && plan.not_selected == 0 {
         out.push_str("No reclaimables found.\n");
+        out.push_str(&tool_notes(&plan.tool_notes));
         return out;
     }
     let now = SystemTime::now()
@@ -238,6 +248,7 @@ pub fn plan_table(plan: &Plan) -> String {
             plan.not_selected
         ));
     }
+    out.push_str(&tool_notes(&plan.tool_notes));
     if plan.plan.iter().any(|e| e.cleanable) {
         out.push_str("\nRun again with --yes to carry out this plan.\n");
     }
@@ -277,6 +288,10 @@ pub fn outcome_table(outcome: &Outcome) -> String {
         "\nFreed {} in total.\n",
         estimated(outcome.freed_bytes, outcome.complete)
     ));
+    out.push_str(&tool_notes(&outcome.tool_notes));
+    for note in &outcome.notes {
+        out.push_str(&format!("\n{note}\n"));
+    }
     out
 }
 

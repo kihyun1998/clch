@@ -11,6 +11,7 @@ clch clean         # show what cleaning would do; nothing is removed
 clch clean --yes   # clean: only what nothing uses, through each tool's own command
 clch clean npm-cache --full --yes   # remove all of one reclaimable; see the ids with `clch scan --json`
 clch clean pnpm-store --yes        # prune the pnpm store on each disk a scan root is on
+clch clean docker-images --full --yes   # remove every image no container uses; volumes and containers are never touched
 
 clch roots add ~/code              # search a folder for project artifacts
 clch scan --older-than-days 30     # list only artifacts in projects not changed for 30 days

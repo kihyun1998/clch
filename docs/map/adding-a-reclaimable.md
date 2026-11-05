@@ -10,6 +10,7 @@ A kind is an entry in `src/catalog.rs`; scan, clean, snapshots and output pick i
 - **Map each cleanup level to the tool's own command, or to none**, and confirm against the real CLI, with a file placed to see what goes: yarn's docs and its behaviour differ. Record why in the note.
 - **`deletable` only where the tool's official docs allow deleting**, and name what looks like the cache, so that a setting pointing elsewhere deletes nothing (ADR-0006).
 - **`one_per_disk` where each disk has its own**, which makes its path its identity.
+- **A store clch cannot walk reports its size through `LocatedSize`**, as Docker does: `Reported` with the tool's figure, `Unavailable` with why not. See [Native cleanup](native-cleanup.md).
 
 ## A project artifact
 

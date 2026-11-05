@@ -24,6 +24,7 @@ pub struct Env {
     path: Option<OsString>,
     cwd: PathBuf,
     answers: RefCell<HashMap<ToolCall, Option<String>>>,
+    reports: RefCell<HashMap<ToolCall, ToolAnswer>>,
 }
 
 impl Env {
@@ -41,6 +42,7 @@ impl Env {
             path: var("PATH"),
             cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             answers: RefCell::new(HashMap::new()),
+            reports: RefCell::new(HashMap::new()),
         }
     }
 
@@ -210,6 +212,27 @@ impl Env {
         command
     }
 
+    /// What `tool args` reports about the present state of things, from the home
+    /// folder. Each distinct call runs once until `forget_reports`.
+    pub fn tool_report(&self, tool: &str, args: &[&str]) -> ToolAnswer {
+        let key = (
+            tool.to_string(),
+            args.iter().map(|a| a.to_string()).collect(),
+            None,
+        );
+        if let Some(answer) = self.reports.borrow().get(&key) {
+            return answer.clone();
+        }
+        let answer = self.ask_tool(tool, args, self.home.as_deref());
+        self.reports.borrow_mut().insert(key, answer.clone());
+        answer
+    }
+
+    /// Makes the next `tool_report` ask again.
+    pub fn forget_reports(&self) {
+        self.reports.borrow_mut().clear();
+    }
+
     /// Asks `tool args` a question from the folder `dir`, within the time limit.
     pub fn ask_tool(&self, tool: &str, args: &[&str], dir: Option<&Path>) -> ToolAnswer {
         let Some(program) = self.find_tool(tool) else {
@@ -272,7 +295,7 @@ fn settings_for(tool: &str) -> &'static [(&'static str, &'static str)] {
 }
 
 /// What came of asking a tool a question.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ToolAnswer {
     Absent,
     /// It could not start, or it exited with a failure.
