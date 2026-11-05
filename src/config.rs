@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use toml_edit::{Array, DocumentMut, value};
 
 use crate::env::Env;
+use crate::scan::Scope;
 
 const FILE: &str = "config.toml";
 const LOCK_FILE: &str = "config.lock";
@@ -155,4 +156,12 @@ fn expand_home(env: &Env, text: &str) -> PathBuf {
         (None, "~", Some(home)) => home.clone(),
         _ => PathBuf::from(text),
     }
+}
+
+/// What a scan searches when nothing replaces the configured scan roots.
+pub fn configured_scope(env: &Env) -> Result<Scope, ConfigError> {
+    Ok(Scope {
+        roots: Config::load(env)?.scan_roots(env),
+        one_off: false,
+    })
 }

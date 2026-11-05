@@ -6,7 +6,7 @@ use clap::{Parser, Subcommand};
 use clch::clean::{self, BadName, Level, Selection};
 use clch::config::{self, Config, ConfigError};
 use clch::scan::Scope;
-use clch::{env::Env, output, scan, snapshots};
+use clch::{dashboard, env::Env, output, scan, snapshots};
 
 /// Find, track and safely clean developer caches and project artifacts.
 #[derive(Parser)]
@@ -56,6 +56,12 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Open a dashboard in the browser, until Ctrl+C.
+    Dashboard {
+        /// Print the URL instead of opening the browser.
+        #[arg(long)]
+        no_open: bool,
+    },
     /// Manage the folders searched for project artifacts.
     Roots {
         #[command(subcommand)]
@@ -91,10 +97,7 @@ fn scope(env: &Env, roots: Vec<PathBuf>) -> Result<Scope, ConfigError> {
             one_off: true,
         });
     }
-    Ok(Scope {
-        roots: Config::load(env)?.scan_roots(env),
-        one_off: false,
-    })
+    config::configured_scope(env)
 }
 
 fn run_roots(env: &Env, command: RootsCommand) -> Result<ExitCode, ConfigError> {
@@ -231,6 +234,13 @@ fn run(env: &Env, command: Command) -> Result<ExitCode, ConfigError> {
                 ExitCode::SUCCESS
             })
         }
+        Command::Dashboard { no_open } => match dashboard::serve(env, no_open) {
+            Ok(()) => Ok(ExitCode::SUCCESS),
+            Err(e) => {
+                eprintln!("error: could not start the dashboard: {e}");
+                Ok(ExitCode::from(2))
+            }
+        },
         Command::Roots { command } => run_roots(env, command),
     }
 }

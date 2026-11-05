@@ -3,6 +3,7 @@
 pub mod catalog;
 pub mod clean;
 pub mod config;
+pub mod dashboard;
 pub mod discover;
 pub mod disks;
 pub mod env;

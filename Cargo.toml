@@ -17,6 +17,8 @@ serde_json = "1"
 which = "8"
 toml_edit = "0.25"
 rusqlite = { version = "0.41", features = ["bundled"] }
+tiny_http = "0.12"
+getrandom = "0.4"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

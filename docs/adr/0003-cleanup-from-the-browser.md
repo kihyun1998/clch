@@ -5,3 +5,7 @@
 ## Considered Options
 
 - A view-only dashboard with cleanup left to the CLI. Rejected because cleaning from the dashboard is part of what the dashboard is for.
+
+## Consequences
+
+A browser cannot put a token on the script and style files a page loads, so those carry none. They hold nothing secret, and they are still refused for a foreign `Host` or `Origin`.

@@ -159,7 +159,12 @@ impl Sandbox {
 
     /// `clch` with an environment that sees only the sandbox.
     pub fn clch(&self) -> Command {
-        let mut cmd = Command::cargo_bin("clch").expect("clch binary");
+        Command::from_std(self.clch_process())
+    }
+
+    /// The same, as a plain process.
+    pub fn clch_process(&self) -> std::process::Command {
+        let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_clch"));
         cmd.env_clear()
             .env("PATH", self.bin())
             .env("HOME", self.home())
@@ -253,4 +258,129 @@ pub fn tool(sb: &Sandbox, name: &str, replies: Vec<(&str, Reply)>) {
     windows.push_str("exit /b 0\r\n");
     windows.push_str(&labels);
     sb.fake_tool(name, &unix, &windows);
+}
+
+/// Seam 2: `clch dashboard` running in a sandbox, stopped when dropped.
+pub struct Dashboard {
+    child: std::process::Child,
+    pub url: String,
+    pub port: u16,
+    pub token: String,
+}
+
+/// An HTTP response from the dashboard.
+pub struct Response {
+    pub status: u16,
+    pub headers: String,
+    pub body: Vec<u8>,
+}
+
+impl Response {
+    pub fn json(&self) -> serde_json::Value {
+        serde_json::from_slice(&self.body).expect("response is JSON")
+    }
+
+    pub fn text(&self) -> String {
+        String::from_utf8_lossy(&self.body).into_owned()
+    }
+}
+
+impl Dashboard {
+    /// Starts `clch dashboard <args>` and reads the URL it prints.
+    pub fn start(sb: &Sandbox, args: &[&str]) -> Dashboard {
+        use std::io::BufRead;
+        let mut child = sb
+            .clch_process()
+            .arg("dashboard")
+            .args(args)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("start dashboard");
+        let stdout = child.stdout.take().expect("piped stdout");
+        let mut line = String::new();
+        std::io::BufReader::new(stdout)
+            .read_line(&mut line)
+            .expect("read the URL");
+        let url = line.trim().to_string();
+        let rest = url
+            .strip_prefix("http://127.0.0.1:")
+            .unwrap_or_else(|| panic!("a URL on 127.0.0.1, not {url:?}"));
+        let (port, token) = rest
+            .split_once("/?token=")
+            .unwrap_or_else(|| panic!("a URL carrying a token, not {url:?}"));
+        let port = port.parse().expect("a port");
+        let token = token.to_string();
+        Dashboard {
+            child,
+            url,
+            port,
+            token,
+        }
+    }
+
+    pub fn host(&self) -> String {
+        format!("127.0.0.1:{}", self.port)
+    }
+
+    /// Sends `method path` with exactly these headers, plus `Host` when none is
+    /// given.
+    pub fn send(&self, method: &str, path: &str, headers: &[(&str, &str)], body: &str) -> Response {
+        use std::io::{Read, Write};
+        let mut stream =
+            std::net::TcpStream::connect(("127.0.0.1", self.port)).expect("connect to dashboard");
+        let mut request = format!("{method} {path} HTTP/1.1\r\nConnection: close\r\n");
+        if !headers.iter().any(|(name, _)| *name == "Host") {
+            request.push_str(&format!("Host: {}\r\n", self.host()));
+        }
+        for (name, value) in headers {
+            request.push_str(&format!("{name}: {value}\r\n"));
+        }
+        request.push_str(&format!("Content-Length: {}\r\n\r\n{body}", body.len()));
+        stream.write_all(request.as_bytes()).expect("send request");
+        let mut raw = Vec::new();
+        stream.read_to_end(&mut raw).expect("read response");
+        let split = raw
+            .windows(4)
+            .position(|w| w == b"\r\n\r\n")
+            .expect("a complete response");
+        let headers = String::from_utf8_lossy(&raw[..split]).into_owned();
+        let status = headers
+            .split_whitespace()
+            .nth(1)
+            .and_then(|s| s.parse().ok())
+            .expect("a status");
+        Response {
+            status,
+            headers,
+            body: raw[split + 4..].to_vec(),
+        }
+    }
+
+    /// A request carrying this run's token.
+    pub fn api(&self, method: &str, path: &str, body: &str) -> Response {
+        let token = self.token.clone();
+        self.send(method, path, &[("X-Clch-Token", token.as_str())], body)
+    }
+
+    pub fn wait_for_exit(&mut self) -> Option<std::process::ExitStatus> {
+        for _ in 0..200 {
+            if let Some(status) = self.child.try_wait().expect("poll dashboard") {
+                return Some(status);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        None
+    }
+
+    pub fn pid(&self) -> u32 {
+        self.child.id()
+    }
+}
+
+impl Drop for Dashboard {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
 }

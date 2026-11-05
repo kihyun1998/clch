@@ -26,6 +26,17 @@ Project artifacts are deleted only when you name them or pick them by age; `clch
 
 A cleanup that fails is reported with the tool's output and makes `clch clean` exit with status 1; the others still run.
 
+## Dashboard
+
+```sh
+clch dashboard            # open it in the browser; Ctrl+C stops it
+clch dashboard --no-open  # print the URL instead
+```
+
+It shows the same reclaimables per disk, and records a snapshot on each scan. It listens only on 127.0.0.1, on a free port, and its page and every API request need the token in the URL it prints.
+
+Building clch from this repository needs Node.js and npm, for the dashboard's UI.
+
 ## License
 
 Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or [MIT license](LICENSE-MIT) at your option.

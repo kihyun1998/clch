@@ -6,7 +6,8 @@ CI runs everything on `windows-latest`, and nothing here replaces that. This cat
 
 ```sh
 copy="$(mktemp -d)"
-cp -R src tests Cargo.toml Cargo.lock README.md "$copy/"
+cp -R src tests build.rs Cargo.toml Cargo.lock README.md "$copy/"
+mkdir "$copy/ui" && cp -R ui/dist "$copy/ui/"
 sed -i '' 's/features = \["bundled"\]/features = []/' "$copy/Cargo.toml"
 (cd "$copy" && cargo clippy --all-targets --target x86_64-pc-windows-msvc -- -D warnings)
 ```
