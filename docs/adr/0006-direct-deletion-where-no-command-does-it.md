@@ -10,3 +10,5 @@ ADR-0001 kept direct deletion of a tool cache for when the tool is not on `PATH`
 ## Consequences
 
 Only what the docs name is deleted, and only once it looks like that: pnpm's `v<number>` stores with a `files` folder, not the folder above them, and Cargo's `registry` and `git` holding nothing but their known entries. The first version deleted the whole folder a setting pointed at, which review reproduced with a `storeDir` pointing at `docs/` and a `CARGO_HOME` at a work folder.
+
+Asked on 2026-11-05 about Xcode's derived data, the maintainer judged that Apple's own material counts as allowing it. They were shown that no Apple documentation page and no command for it were found, only Xcode 27's "Delete Derived Data" menu item and an Apple engineer in WWDC26's Xcode lab giving a full disk as a reason to delete it while saying it should not be needed. A further search found nothing more. So "the docs allow it" here includes what the tool's maker ships and says, not only its documentation pages.

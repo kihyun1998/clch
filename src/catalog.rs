@@ -100,10 +100,16 @@ pub struct NativeCleanup {
 /// How to tell that a folder is the cache clch thinks it is, and what to delete.
 #[derive(Debug, Clone, Copy)]
 pub enum Deletable {
-    /// A folder holding only these entries, deleted whole.
-    FolderHolding(&'static [&'static str]),
+    /// A folder holding every entry of `needs` and only entries of `holds`,
+    /// deleted whole.
+    FolderHolding {
+        holds: &'static [&'static str],
+        needs: &'static [&'static str],
+    },
     /// Each `v<number>` folder inside that has a `files` folder.
     VersionedStores,
+    /// A folder of this name, deleted whole.
+    FolderNamed(&'static str),
 }
 
 pub fn tool_caches() -> &'static [ToolCacheKind] {
@@ -228,12 +234,10 @@ pub fn tool_caches() -> &'static [ToolCacheKind] {
             cleanup: NativeCleanup {
                 tool: "cargo",
                 also_named: &[],
-                deletable: Some(Deletable::FolderHolding(&[
-                    "cache",
-                    "src",
-                    "index",
-                    "CACHEDIR.TAG",
-                ])),
+                deletable: Some(Deletable::FolderHolding {
+                    holds: &["cache", "src", "index", "CACHEDIR.TAG"],
+                    needs: &[],
+                }),
                 unused: None,
                 full: None,
                 min_version: None,
@@ -249,11 +253,10 @@ pub fn tool_caches() -> &'static [ToolCacheKind] {
             cleanup: NativeCleanup {
                 tool: "cargo",
                 also_named: &[],
-                deletable: Some(Deletable::FolderHolding(&[
-                    "db",
-                    "checkouts",
-                    "CACHEDIR.TAG",
-                ])),
+                deletable: Some(Deletable::FolderHolding {
+                    holds: &["db", "checkouts", "CACHEDIR.TAG"],
+                    needs: &[],
+                }),
                 unused: None,
                 full: None,
                 min_version: None,
@@ -324,6 +327,98 @@ pub fn tool_caches() -> &'static [ToolCacheKind] {
                 below_version: None,
             },
             windows_note: Some(docker::WSL_DISK),
+        },
+        ToolCacheKind {
+            id: "pub-cache",
+            name: "pub cache",
+            locate: dart::pub_cache,
+            one_per_disk: false,
+            cleanup: NativeCleanup {
+                tool: "dart",
+                also_named: &[],
+                deletable: Some(Deletable::FolderHolding {
+                    holds: &[
+                        "hosted",
+                        "hosted-hashes",
+                        "git",
+                        "global_packages",
+                        "bin",
+                        "_temp",
+                        "active_roots",
+                        "README.md",
+                    ],
+                    needs: &["hosted"],
+                }),
+                unused: Some(&["pub", "cache", "gc", "--force"]),
+                full: Some(&["pub", "cache", "clean", "--force"]),
+                min_version: None,
+                below_version: None,
+            },
+            windows_note: None,
+        },
+        ToolCacheKind {
+            id: "homebrew-cache",
+            name: "Homebrew cache",
+            locate: macos::homebrew,
+            one_per_disk: false,
+            cleanup: NativeCleanup {
+                tool: "brew",
+                also_named: &[],
+                deletable: None,
+                unused: Some(&["cleanup", "--scrub"]),
+                full: Some(&["cleanup", "--prune=all"]),
+                min_version: None,
+                below_version: None,
+            },
+            windows_note: None,
+        },
+        ToolCacheKind {
+            id: "xcode-derived-data",
+            name: "Xcode derived data",
+            locate: macos::derived_data,
+            one_per_disk: false,
+            cleanup: NativeCleanup {
+                tool: "xcodebuild",
+                also_named: &[],
+                deletable: Some(Deletable::FolderNamed("DerivedData")),
+                unused: None,
+                full: None,
+                min_version: None,
+                below_version: None,
+            },
+            windows_note: None,
+        },
+        ToolCacheKind {
+            id: "xcode-device-support",
+            name: "Xcode device support",
+            locate: macos::device_support,
+            one_per_disk: false,
+            cleanup: NativeCleanup {
+                tool: "xcodebuild",
+                also_named: &[],
+                deletable: None,
+                unused: None,
+                full: None,
+                min_version: None,
+                below_version: None,
+            },
+            windows_note: None,
+        },
+        ToolCacheKind {
+            id: "xcode-simulators",
+            name: "Xcode simulators",
+            locate: macos::simulators,
+            one_per_disk: false,
+            cleanup: NativeCleanup {
+                tool: "xcrun",
+                also_named: &[],
+                deletable: None,
+                unused: Some(&["simctl", "delete", "unavailable"]),
+                full: Some(&["simctl", "delete", "unavailable"]),
+                min_version: None,
+                below_version: None,
+            },
+            windows_note: None,
         },
     ]
 }
@@ -605,6 +700,70 @@ mod go {
                 .or_else(|| Some(env.home()?.join("go")))?;
             Some(gopath.join("pkg").join("mod"))
         }))
+    }
+}
+
+mod dart {
+    use super::*;
+
+    /// `PUB_CACHE`, else the default in Dart's docs.
+    pub fn pub_cache(env: &Env, _roots: &[PathBuf]) -> Vec<Located> {
+        if let Some(dir) = env.var("PUB_CACHE") {
+            return one(Some(PathBuf::from(dir)));
+        }
+        one(if cfg!(windows) {
+            local_app_data(env).map(|d| d.join("Pub").join("Cache"))
+        } else {
+            env.home().map(|h| h.join(".pub-cache"))
+        })
+    }
+}
+
+mod macos {
+    use super::*;
+
+    fn developer(env: &Env, rest: &str) -> Vec<Located> {
+        if !cfg!(target_os = "macos") {
+            return Vec::new();
+        }
+        one(env.home().map(|h| h.join("Library/Developer").join(rest)))
+    }
+
+    /// What brew reports, else `HOMEBREW_CACHE`, else brew's default.
+    pub fn homebrew(env: &Env, _roots: &[PathBuf]) -> Vec<Located> {
+        if !cfg!(target_os = "macos") {
+            return Vec::new();
+        }
+        one(reported(env, "brew", &["--cache"]).or_else(|| {
+            if let Some(dir) = env.var("HOMEBREW_CACHE") {
+                return Some(PathBuf::from(dir));
+            }
+            Some(env.home()?.join("Library/Caches/Homebrew"))
+        }))
+    }
+
+    /// Where Xcode's settings put derived data, else its default.
+    pub fn derived_data(env: &Env, _roots: &[PathBuf]) -> Vec<Located> {
+        if !cfg!(target_os = "macos") {
+            return Vec::new();
+        }
+        let set = reported(
+            env,
+            "defaults",
+            &["read", "com.apple.dt.Xcode", "IDECustomDerivedDataLocation"],
+        );
+        match set {
+            Some(path) => one(Some(path)),
+            None => developer(env, "Xcode/DerivedData"),
+        }
+    }
+
+    pub fn device_support(env: &Env, _roots: &[PathBuf]) -> Vec<Located> {
+        developer(env, "Xcode/iOS DeviceSupport")
+    }
+
+    pub fn simulators(env: &Env, _roots: &[PathBuf]) -> Vec<Located> {
+        developer(env, "CoreSimulator/Devices")
     }
 }
 

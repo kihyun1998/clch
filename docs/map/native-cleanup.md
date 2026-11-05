@@ -66,6 +66,27 @@ Classic and Berry are separate reclaimables, because a cache left by the one not
 - **What a cleanup freed is what Docker's report dropped by**, not the host's free space, which can stay as it was for a while.
 - **On Windows the result explains compaction.** Microsoft's `compact vdisk` page: dynamically expanding VHDs "do not automatically reduce in size when you delete files", and it works only on one detached or attached read-only, hence quitting Docker Desktop and `wsl --shutdown` first. `wsl.exe`'s own help says `--set-sparse` makes the VHD "allowing disk space to be automatically reclaimed" and that sparse VHDs "are currently experimental", and `wsl-config`'s `sparseVhd` applies to newly created VHDs, so the text says to check first. Docker's release notes for 4.59.0 say "Temporarily disabled VHDX compaction for the WSL data disk", so Docker Desktop may or may not do it itself; later notes do not say it came back. `wsl --manage <distro> --compact` is in WSL's source but in no doc read, and Docker's data disk is not shown to be a distro's own VHD, so diskpart is what is given. The disk's file name is not in Docker's docs, so the text names the folder. None of this was run on a real Windows machine; Microsoft also recommends against touching WSL's files in `AppData` with Windows tools, and clch only guides, per the spec.
 
+## pub cache
+
+- **Unused cleanup is `dart pub cache gc --force`, full is `dart pub cache clean --force`.** `gc` keeps what the projects pub knows of still use, and anything changed in the last 2 hours (pub's `cache_gc.dart`), read here with `--dry-run`, which found 32 projects. On an older Dart without `gc`, the run fails with Dart's own message. No version was pinned, since `dart --version` does not print a bare number and the first version with `gc` was not read.
+- **`gc` counts a project it cannot read as using nothing**, per its source, so a project on a disk not attached can lose its packages, which `dart pub get` brings back.
+- **A full cleanup also takes what `dart pub global activate` installed**, since `clean` removes the whole folder and both are in it, as measured on a temp `PUB_CACHE`.
+- **There is no command that says where it is.** `PUB_CACHE` is the setting and the defaults are in Dart's glossary, `~/.pub-cache` and `%LOCALAPPDATA%\Pub\Cache`, "though its exact location might vary depending on the Windows version". Windows has not been measured.
+- **Without dart, a full cleanup deletes it** (ADR-0006). Dart's docs: "you can manually delete the PUB_CACHE folder". Only while it has `hosted` and holds nothing but pub's entries, listed as measured here.
+
+## Homebrew cache
+
+- **Unused cleanup is `brew cleanup --scrub`, full is `brew cleanup --prune=all`.** Help: `--scrub` "including downloads for even the latest versions. Note that downloads for any installed formulae or casks will still not be deleted"; `--prune` "If you want to remove everything, use --prune=all". Dry runs here: 24.2 MB and 160.2 MB of a 197 MB cache, the second including a download for an installed formula. Together they printed nothing, so they are not combined. Both also remove old versions of installed formulae, which is outside the cache and comes with the command.
+- **Without brew it is not deleted.** The help's `rm -rf "$(brew --cache)"` would allow it under ADR-0006, but the folder has no fixed set of names to recognise, and a first version deleting `downloads` and `api` from wherever `HOMEBREW_CACHE` pointed took a project's folders in review.
+- **Detected only on macOS**, per the spec. Windows has no Homebrew.
+
+## Xcode data
+
+- **Derived data has no command.** `xcodebuild clean` is per project. A full cleanup deletes the folder: the maintainer judged Xcode 27's "Delete Derived Data" menu item and what Apple's engineers said in WWDC26's Xcode lab as allowing it under ADR-0006; see that record. Only a folder called `DerivedData` that git tracks nothing in goes, because `IDECustomDerivedDataLocation` can point at a folder of the user's. A location Xcode keeps relative to a project is not an absolute path, so it is not believed and the default is looked at. No derived data was on the maintainer's Mac to measure, so a rebuild afterwards is taken from forum answers, not seen.
+- **Simulators get `xcrun simctl delete unavailable` at either level**, which its help describes as devices "not supported by the current Xcode SDK". `simctl delete all` would take the apps and their data in every simulator, so `--full` does not run it (maintainer's call, 2026-11-05). Runtimes (`simctl runtime delete`) are not listed: they live outside the home folder, and there were none here.
+- **iOS device support is shown and not cleaned.** No command and no doc was found, so ADR-0006's rule leaves it. Other platforms' device support is not listed; it was not seen here.
+- **Archives are never listed.** They hold what shipped, with its symbols, and nothing can produce them again, so they are not reclaimables.
+
 ## How tools are run
 
 - **From the home folder, never from a project**, whose folder can hold settings and code a tool acts on; the home folder and a `.pnpm-store` are the only places tools run. npm reads the `.npmrc` of the folder it runs in, so a project could otherwise redirect the cache npm reports or cleans.

@@ -293,6 +293,15 @@ fn entry(env: &Env, r: &Reclaimable, level: Level) -> PlanEntry {
     }
     let Some(args) = args else {
         let reason = match level {
+            _ if cleanup.unused.is_none()
+                && cleanup.full.is_none()
+                && cleanup.deletable.is_none() =>
+            {
+                format!(
+                    "{} has no command for this, and its docs do not allow deleting it",
+                    cleanup.tool
+                )
+            }
             Level::Unused => format!(
                 "{} offers no cleanup of only unused data here; use --full to remove all of it",
                 cleanup.tool
@@ -350,8 +359,8 @@ fn entry(env: &Env, r: &Reclaimable, level: Level) -> PlanEntry {
         }
     }
     let expected_bytes = match level {
-        Level::Full => Some(r.size_bytes),
-        Level::Unused => None,
+        Level::Full if cleanup.full != cleanup.unused => Some(r.size_bytes),
+        _ => None,
     };
     PlanEntry {
         id: kind.id.to_string(),
@@ -606,11 +615,19 @@ fn what_to_delete(env: &Env, path: &Path, deletable: Deletable) -> Result<Vec<Pa
         .collect::<Result<_, _>>()
         .map_err(|e| e.to_string())?;
     let folders = match deletable {
-        Deletable::FolderHolding(expected) => {
+        Deletable::FolderHolding { holds, needs } => {
+            let missing = needs
+                .iter()
+                .find(|need| !entries.iter().any(|e| e.file_name() == **need));
+            if let Some(missing) = missing {
+                return Err(format!(
+                    "{shown} does not look like this cache: it has no {missing}"
+                ));
+            }
             let stray = entries.iter().find(|entry| {
                 let name = entry.file_name();
                 let name = name.to_string_lossy();
-                !expected.contains(&name.as_ref()) && !IGNORED_ENTRIES.contains(&name.as_ref())
+                !holds.contains(&name.as_ref()) && !IGNORED_ENTRIES.contains(&name.as_ref())
             });
             if let Some(stray) = stray {
                 return Err(format!(
@@ -639,6 +656,15 @@ fn what_to_delete(env: &Env, path: &Path, deletable: Deletable) -> Result<Vec<Pa
                 ));
             }
             stores
+        }
+        Deletable::FolderNamed(name) => {
+            if path.file_name().is_none_or(|n| n != name) {
+                return Err(format!(
+                    "{shown} does not look like this cache: it is not called {name}"
+                ));
+            }
+            tracked_by_git(env, path)?;
+            vec![path.to_path_buf()]
         }
     };
     if let Some(mounted) = folders.iter().find(|f| discover::holds_another_disk(f)) {
