@@ -189,7 +189,11 @@ fn run(env: &Env, command: Command) -> Result<ExitCode, ConfigError> {
             let plan = match clean::plan(env, &found, &selection, level) {
                 Ok(plan) => plan,
                 Err(BadName::Unknown(name)) => {
-                    eprintln!("error: no reclaimable is called '{name}'");
+                    eprintln!(
+                        "error: no reclaimable is called '{name}'. A project artifact is found \
+                         only under the scan roots: add its folder with `clch roots add`, or \
+                         give it for this run with --root."
+                    );
                     return Ok(ExitCode::from(2));
                 }
                 Err(BadName::Ambiguous(name)) => {
