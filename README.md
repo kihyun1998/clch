@@ -4,7 +4,32 @@ Find the disk space developer tooling leaves behind on Windows and macOS, see ho
 
 ## Install
 
-clch has not been released yet, so build it from this repository. That needs Rust and Node.js with npm, the latter for the dashboard's UI. macOS (Apple silicon and Intel) and Windows (x86_64) are supported.
+macOS (Apple silicon and Intel) and Windows (x86_64) are supported.
+
+Homebrew:
+
+```sh
+brew tap kihyun1998/tap
+brew trust kihyun1998/tap
+brew install clch
+```
+
+Scoop:
+
+```powershell
+scoop bucket add kihyun1998 https://github.com/kihyun1998/scoop-bucket
+scoop install clch
+```
+
+Cargo:
+
+```sh
+cargo install clch
+```
+
+Each OS also has a binary on the [releases page](https://github.com/kihyun1998/clch/releases).
+
+To build from this repository, you need Rust and Node.js with npm, the latter for the dashboard's UI:
 
 ```sh
 git clone https://github.com/kihyun1998/clch
