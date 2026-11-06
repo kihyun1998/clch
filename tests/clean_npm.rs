@@ -306,6 +306,26 @@ fn an_unknown_reclaimable_is_an_error() {
 }
 
 #[test]
+fn an_unknown_name_says_how_a_project_artifact_is_reached() {
+    let m = NpmMachine::new(1, 1, 1);
+    m.npm(&[]);
+
+    let output =
+        m.sb.clch()
+            .args(["clean", "no-such-thing"])
+            .output()
+            .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        stderr.contains("no reclaimable is called 'no-such-thing'"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("clch roots add"), "{stderr}");
+    assert!(stderr.contains("--root"), "{stderr}");
+}
+
+#[test]
 fn the_text_result_lists_each_reclaimable_and_the_total() {
     let m = NpmMachine::new(1000, 200, 300);
     m.npm(&[]);

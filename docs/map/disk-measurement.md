@@ -12,7 +12,7 @@
 
 ## Disk
 
-- **A disk is named by where it is mounted.** On macOS that comes from `statfs`, not from walking up parents until the device changes: `/Users` is a firmlink into `/System/Volumes/Data`, and a walk would stop at `/Users`. `df` reports the same name. On Windows it is `GetVolumePathNameW`.
+- **A disk is named by where it is mounted.** On macOS that comes from `statfs`, not from walking up parents until the device changes: `/Users` is a firmlink into `/System/Volumes/Data`, and a walk would stop at `/Users`. `df` reports the same name. On Windows it is `GetVolumePathNameW` with the drive letter in upper case, because that call repeats the letter as the path spells it, and pip reports a lower-case path: a real scan listed `C:\` and `c:\` as two disks.
 - **Free space is what this user can use**: `f_bavail` on Unix, the caller's figure from `GetDiskFreeSpaceExW` on Windows. It has not been compared with Finder, which may also count purgeable space.
 
 ## Freed space

@@ -105,9 +105,30 @@ mod imp {
         if ok == 0 {
             return None;
         }
+        let mut name = String::from_utf16_lossy(&mount[..end]);
+        if name.as_bytes().get(1) == Some(&b':') {
+            name[..1].make_ascii_uppercase();
+        }
         Some(Disk {
-            name: String::from_utf16_lossy(&mount[..end]),
+            name,
             free_bytes: free,
         })
+    }
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use std::path::Path;
+
+    use super::of_path;
+
+    #[test]
+    fn a_drive_is_one_disk_however_a_path_spells_its_letter() {
+        let drive = std::env::var("SystemDrive").unwrap();
+        let upper = format!("{}\\", drive.to_uppercase());
+        let lower = format!(r"{}\windows", drive.to_lowercase());
+
+        assert_eq!(of_path(Path::new(&upper)).unwrap().name, upper);
+        assert_eq!(of_path(Path::new(&lower)).unwrap().name, upper);
     }
 }
