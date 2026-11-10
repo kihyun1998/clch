@@ -179,6 +179,7 @@ pub const MS_PER_DAY: i64 = 24 * 60 * 60 * 1000;
 
 pub fn run(env: &Env, scope: &Scope) -> Scan {
     env.forget_reports();
+    let started = std::time::Instant::now();
     let taken_at_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_millis() as i64);
@@ -237,6 +238,7 @@ pub fn run(env: &Env, scope: &Scope) -> Scan {
     let mut not_projects = env.application_folders();
     for kind in catalog::tool_caches() {
         env.progress_step(|| format!("Looking for the {}", kind.name));
+        env.narrate(|| format!("  looking for the {}", kind.name));
         for located in (kind.locate)(env, &scope.roots) {
             let in_folder = located.path.is_absolute() && located.path.is_dir();
             if in_folder {
@@ -271,6 +273,14 @@ pub fn run(env: &Env, scope: &Scope) -> Scan {
         }
     }
     let found = discover::find(env, &scope.roots, &not_projects);
+    if !found.artifacts.is_empty() {
+        env.narrate(|| {
+            format!(
+                "  measuring {}",
+                crate::output::counted(found.artifacts.len(), "project artifact")
+            )
+        });
+    }
     for artifact in found.artifacts {
         add(
             Kind::ProjectArtifact,
@@ -280,6 +290,13 @@ pub fn run(env: &Env, scope: &Scope) -> Scan {
             Source::default(),
         );
     }
+    env.narrate(|| {
+        format!(
+            "  found {} ({:.1} s)",
+            crate::output::counted(reclaimables.len(), "reclaimable"),
+            started.elapsed().as_secs_f32()
+        )
+    });
     env.progress_done();
     reclaimables.sort_by_key(|r| match r.kind {
         Kind::ToolCache => (0, 0),

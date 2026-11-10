@@ -47,6 +47,7 @@ pub fn find(env: &Env, roots: &[PathBuf], not_projects: &[PathBuf]) -> Discovery
             }
             continue;
         }
+        env.narrate(|| format!("  searching {}", root.display()));
         let mut search = Search {
             env,
             not_projects: &not_projects,

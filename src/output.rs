@@ -11,10 +11,13 @@ use crate::scan::{ChangeState, MS_PER_DAY, Scan, ToolNote};
 /// A byte count in decimal units (kB, MB, GB).
 /// `path` with control characters replaced, so that a folder's name cannot move
 /// the cursor or invent a row in a table.
-fn shown(path: &Path) -> String {
-    path.display()
-        .to_string()
-        .chars()
+pub fn shown(path: &Path) -> String {
+    plain(&path.display().to_string())
+}
+
+/// `text` with control characters replaced, so that it cannot move the cursor.
+pub fn plain(text: &str) -> String {
+    text.chars()
         .map(|c| if c.is_control() { '?' } else { c })
         .collect()
 }
@@ -34,6 +37,17 @@ pub fn progress_on_stderr(message: Option<&str>) {
         None if terminal => eprint!("\r\x1b[K"),
         None => {}
     }
+}
+
+/// Says on stderr one line of what a scan did, to stay on screen, with control
+/// characters replaced so that a folder's name cannot move the cursor.
+pub fn narration_on_stderr(line: &str) {
+    eprintln!("{}", plain(line));
+}
+
+/// `count` of `noun`, in the plural unless it is one.
+pub fn counted(count: usize, noun: &str) -> String {
+    format!("{count} {noun}{}", if count == 1 { "" } else { "s" })
 }
 
 /// The most of a message shown on a terminal, so that it stays on one line.

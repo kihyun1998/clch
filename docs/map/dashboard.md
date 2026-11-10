@@ -20,6 +20,7 @@ A CLI preview and its `--yes` are separate runs, so what runs can differ from wh
 - **A selection is exact rows, by id and path**, never kinds or an empty list. An empty one means every tool cache in the CLI, so it is refused. Two Docker rows can share a path, so a path alone will not do.
 - **The cleanup scans again and builds the plan again.** If an entry's identity, action or project age differs, nothing runs and the person previews again. So a folder gone, a project edited since, or a different command refuses the plan, and something that appeared is not in it. What a tool's command acts on is not compared: Docker pointed at another local engine since the preview runs there, as it would in the CLI between its two runs. A size that changed does not refuse it: a cache grows all the time, and the entry's meaning is the same.
 - **Only one cleanup runs at a time.**
+- **A cleanup tells its steps on the server's stderr, not on the screen.** It runs `clean::execute`, which prints `[2/3]`, `[3/3]` and a line per reclaimable as the CLI does. The `[1/3]` and the scan lines belong to the `clch clean` command and are not printed here, so the server's log starts at `[2/3]`.
 - **A refused plan rescans**, since the map beside it no longer matches what the server holds.
 - **The reply holds the scan after the cleanup**, which is its snapshot, so the map updates without a third measurement.
 

@@ -137,7 +137,9 @@ fn print_json(value: &impl serde::Serialize) {
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let env = Env::from_process();
-    if !matches!(cli.command, Command::Dashboard { .. }) {
+    if matches!(cli.command, Command::Clean { .. }) {
+        env.narrate_to(Box::new(output::narration_on_stderr));
+    } else if !matches!(cli.command, Command::Dashboard { .. }) {
         env.report_progress_to(Duration::from_secs(1), Box::new(output::progress_on_stderr));
     }
     match run(&env, cli.command) {
@@ -180,6 +182,7 @@ fn run(env: &Env, command: Command) -> Result<ExitCode, ConfigError> {
         } => {
             let level = if full { Level::Full } else { Level::Unused };
             let scope = scope(env, roots)?;
+            eprintln!("[1/{}] Scanning", if yes { 3 } else { 1 });
             let found = scan::run(env, &scope);
             let selection = Selection {
                 names,

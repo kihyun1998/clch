@@ -27,8 +27,12 @@ pub struct Env {
     answers: RefCell<HashMap<ToolCall, Option<String>>>,
     reports: RefCell<HashMap<ToolCall, ToolAnswer>>,
     progress: RefCell<Option<Progress>>,
+    narration: RefCell<Option<NarrationSink>>,
     tool_timeout: Duration,
 }
+
+/// Takes one line saying what a scan is doing, to be kept.
+pub type NarrationSink = Box<dyn Fn(&str)>;
 
 /// Where word of a long run goes.
 struct Progress {
@@ -62,6 +66,7 @@ impl Env {
             answers: RefCell::new(HashMap::new()),
             reports: RefCell::new(HashMap::new()),
             progress: RefCell::new(None),
+            narration: RefCell::new(None),
             tool_timeout: std::env::var("CLCH_TOOL_TIMEOUT_SECS")
                 .ok()
                 .and_then(|secs| secs.parse().ok())
@@ -243,6 +248,18 @@ impl Env {
             last: Cell::new(None),
             sink,
         });
+    }
+
+    /// Sends each line a scan narrates to `sink`.
+    pub fn narrate_to(&self, sink: NarrationSink) {
+        *self.narration.borrow_mut() = Some(sink);
+    }
+
+    /// Says one line about the scan, where narration is on.
+    pub fn narrate(&self, line: impl FnOnce() -> String) {
+        if let Some(sink) = self.narration.borrow().as_ref() {
+            sink(&line());
+        }
     }
 
     /// Says what is starting now, which may take a while.

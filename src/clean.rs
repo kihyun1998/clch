@@ -2,6 +2,7 @@
 
 use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
@@ -478,16 +479,48 @@ fn version_at_least(have: &str, min: &str) -> bool {
     true
 }
 
+/// What a finished cleanup says: that it worked, or why not on one line, and
+/// how long it took.
+fn finished(run: &Result<(), String>, took: Duration) -> String {
+    let secs = took.as_secs_f32();
+    match run {
+        Ok(()) => format!("cleaned ({secs:.1} s)"),
+        Err(output) => format!(
+            "failed: {} ({secs:.1} s)",
+            crate::output::plain(output.lines().next().unwrap_or_default().trim())
+        ),
+    }
+}
+
+/// Whether a cleanup is told line by line: it has something to run and a name
+/// for what it does.
+fn announced(entry: &PlanEntry) -> bool {
+    entry.method.is_some() && entry.action.is_some()
+}
+
 /// Carries out every cleanable entry of `plan`, each independently, and
 /// measures the result against `before`, the scan the plan was built from. The
 /// scan taken afterwards is returned as well.
 pub fn execute(env: &Env, plan: Plan, before: &Scan, scope: &Scope) -> (Outcome, Scan) {
+    let total = plan.plan.iter().filter(|e| announced(e)).count();
+    eprintln!(
+        "[2/3] Cleaning {}",
+        crate::output::counted(total, "reclaimable")
+    );
+    let mut number = 0;
     let attempted: Vec<_> = plan
         .plan
         .into_iter()
         .map(|entry| {
-            if let (Some(_), Some(action)) = (&entry.method, &entry.action) {
-                eprintln!("{}: {action}", entry.name);
+            let started = Instant::now();
+            let listed = announced(&entry);
+            if let (true, Some(action)) = (listed, &entry.action) {
+                number += 1;
+                let label = match (&entry.method, &entry.path) {
+                    (Some(Method::Direct(_)), Some(path)) => crate::output::shown(path),
+                    _ => entry.name.clone(),
+                };
+                eprintln!("  [{number}/{total}] {label}: {action}");
             }
             let run = entry.method.as_ref().map(|method| match method {
                 Method::Native(tool, args, dir) => {
@@ -498,9 +531,13 @@ pub fn execute(env: &Env, plan: Plan, before: &Scan, scope: &Scope) -> (Outcome,
                     delete_cache(env, entry.path.as_deref(), deletable)
                 }
             });
+            if let (true, Some(run)) = (listed, &run) {
+                eprintln!("        {}", finished(run, started.elapsed()));
+            }
             (entry, run)
         })
         .collect();
+    eprintln!("[3/3] Measuring what was freed");
     let after = scan::run(env, scope);
 
     let silent_after = |r: &Reclaimable| {
