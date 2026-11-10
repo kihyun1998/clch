@@ -21,12 +21,6 @@ scoop bucket add kihyun1998 https://github.com/kihyun1998/scoop-bucket
 scoop install clch
 ```
 
-Cargo:
-
-```sh
-cargo install clch
-```
-
 Each OS also has a binary on the [releases page](https://github.com/kihyun1998/clch/releases).
 
 To build from this repository, you need Rust and Node.js with npm, the latter for the dashboard's UI:

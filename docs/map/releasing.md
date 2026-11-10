@@ -6,7 +6,7 @@ The version in `Cargo.toml` must match the tag, or the crate step looks for a fo
 
 ## After the tag
 
-- **`cargo publish --allow-dirty`**, by hand, from a tree where `ui/dist` is built. It takes a person's credentials, so the workflow does not do it. `ui/dist` is ignored by git and carried in the crate, which Cargo counts as uncommitted. A version on crates.io cannot be replaced or deleted, so this comes after the release has passed.
+- **Nothing goes to crates.io** (ADR-0007), and `publish = false` in `Cargo.toml` makes `cargo publish` refuse. The `crate` job still packages the crate and installs it, as a check that a source install works with no Node. It needs `--allow-dirty`, since `ui/dist` is ignored by git and carried in the crate, which Cargo counts as uncommitted.
 - **Homebrew and Scoop update themselves.** clch lives in the shared `kihyun1998/homebrew-tap` and `kihyun1998/scoop-bucket`, as the maintainer's other CLI tools do. Each has an hourly `auto-update` workflow that reads the latest release and hashes its archives, and a `test-install` workflow that installs what changed.
 
 The rendered `clch.rb` and `clch.json` on a release are not what those repositories use: their workflows write their own.

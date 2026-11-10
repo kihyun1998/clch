@@ -7,6 +7,7 @@ description = "Find, track and safely clean developer caches and project artifac
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/kihyun1998/clch"
 readme = "README.md"
+publish = false
 keywords = ["cache", "cleaner", "disk-space", "npm", "cli"]
 categories = ["command-line-utilities", "filesystem"]
 include = [
